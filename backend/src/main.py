@@ -102,6 +102,7 @@ from src.api.chats import router as chats_router  # noqa: E402  # pyright: ignor
 from src.api.google_calendar_auth import router as google_calendar_auth_router  # noqa: E402  # pyright: ignore[reportMissingImports]
 from src.api.share import router as share_router  # noqa: E402  # pyright: ignore[reportMissingImports]
 from src.api.sse import router as sse_router  # noqa: E402  # pyright: ignore[reportMissingImports]
+from src.api.upload import router as upload_router  # noqa: E402  # pyright: ignore[reportMissingImports]
 from src.api.users import router as users_router  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 app.include_router(auth_router)  # /api/v1/auth/* 엔드포인트 (회원가입 등)
@@ -112,6 +113,7 @@ app.include_router(chats_router)  # /api/v1/chats/* 엔드포인트 5개
 app.include_router(sse_router)  # /api/v1/chat/stream SSE 엔드포인트
 app.include_router(google_calendar_auth_router)  # /api/v1/auth/google/calendar OAuth 2종
 app.include_router(share_router)  # 공유 링크 3개
+app.include_router(upload_router)  # /api/v1/upload/image 이미지 업로드
 
 
 @app.get("/health")
