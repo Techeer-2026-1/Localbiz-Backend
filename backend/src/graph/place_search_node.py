@@ -76,12 +76,12 @@ async def _search_pg(
         sql += f" AND category ILIKE ${len(params)}"
 
     if neighborhood:
-        # 동/지역명으로 주소 또는 상호명 검색
+        # 동/지역명으로 주소 검색만 (name ILIKE 제거 — "홍대쌀국수(영등포)" 등 노이즈 방지)
         params.append(f"%{neighborhood}%")
-        sql += f" AND (address ILIKE ${len(params)} OR name ILIKE ${len(params)})"
+        sql += f" AND address ILIKE ${len(params)}"
 
     if keywords:
-        # 키워드로 name 검색 (첫 번째만)
+        # 키워드로 name 검색 (첫 번째만, 보조 필터)
         params.append(f"%{keywords[0]}%")
         sql += f" AND name ILIKE ${len(params)}"
 
@@ -127,19 +127,24 @@ async def _search_os(
     os_client: Any,
     query: str,
     api_key: str,
+    district: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """places_vector k-NN HNSW 검색. 쿼리 임베딩 → 유사도 top-K."""
+    """places_vector k-NN HNSW 검색. district 있으면 필터 적용."""
     try:
         query_vector = await _embed_query_768d(query, api_key)
+
+        knn_params: dict[str, Any] = {
+            "vector": query_vector,
+            "k": _OS_TOP_K,
+        }
+        if district:
+            knn_params["filter"] = {"term": {"district": district}}
 
         body: dict[str, Any] = {
             "size": _OS_TOP_K,
             "query": {
                 "knn": {
-                    "embedding": {
-                        "vector": query_vector,
-                        "k": _OS_TOP_K,
-                    }
+                    "embedding": knn_params,
                 }
             },
             "min_score": _OS_MIN_SCORE,
@@ -378,7 +383,7 @@ async def place_search_node(state: dict[str, Any]) -> dict[str, Any]:
         try:
             os_client = get_os_client()
             search_text = expanded_query or query
-            os_task = asyncio.create_task(_search_os(os_client, search_text, settings.gemini_llm_api_key))
+            os_task = asyncio.create_task(_search_os(os_client, search_text, settings.gemini_llm_api_key, district))
         except RuntimeError:
             logger.warning("OpenSearch client not initialized, skipping vector search")
 
