@@ -183,7 +183,9 @@ async def calendar_node(state: AgentState) -> dict[str, Any]:
 
     return {
         "response_blocks": [
-            _text_stream_block(event_title, start_time, status, end_time=end_time, location=location, end_time_auto=end_time_auto),
+            _text_stream_block(
+                event_title, start_time, status, end_time=end_time, location=location, end_time_auto=end_time_auto
+            ),
             _calendar_block(
                 event_title=event_title,
                 start_time=start_time,
