@@ -42,3 +42,4 @@
 리뷰 비교,Phase 1,리뷰,6지표 런타임 Gemini 채점 + 레이더차트,,정조셉,,,시작 전
 비용 견적,Phase 1,비용,3단계 가격 추정,,정조셉,,,시작 전
 대화: AI 피드백,Phase 1,대화,AI 응답 피드백,"AI 응답 하단에 피드백 버튼 표시. 클릭 시 feedback 테이블에 (user_id, thread_id, message_id, rating, comment) 저장. append-only.",정조셉,,,시작 전
+이미지 업로드 (GCS 호스팅),Phase 1,이미지 검색,POST /api/v1/upload/image,"사용자 이미지(jpg/png/webp, 최대 10MB)를 GCS uploads/ 폴더에 업로드 후 1시간짜리 signed URL 반환. FE가 URL을 채팅 쿼리에 포함 → image_search_node가 URL로 이미지 다운로드. GCE Workload Identity 기반 signed URL. 버킷 lifecycle 규칙으로 24시간 후 자동 삭제.",강민서,feat/#103 PR 진행중,,진행중
