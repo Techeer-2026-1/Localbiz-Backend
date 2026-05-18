@@ -91,7 +91,7 @@ AnyWay/
 
 ---
 
-## 6단계 Onboarding (목표 60분)
+## 7단계 Onboarding (목표 60분)
 
 ### 1. Clone
 
@@ -133,7 +133,31 @@ shell 재시작 후 `echo $DB_PASSWORD` 가 값을 출력해야 함.
 
 > 🔧 Cloud SQL Auth Proxy / GCE OpenSearch SSH 터널 셋업은 [`docs/dev-environment.md`](docs/dev-environment.md) 참조.
 
-### 5. validate.sh 통과 확인
+### 5. oh-my-claudecode (OMC) 설치
+
+Claude Code 멀티에이전트 오케스트레이션 플러그인. 팀 전원 설치 권장.
+
+```bash
+# 글로벌 설치
+npm i -g oh-my-claude-sisyphus@latest
+
+# backend 디렉토리에서 셋업
+cd backend
+omc setup
+```
+
+셋업 완료 후 Claude Code 세션에서 `/omc-setup`으로 인터랙티브 설정 가능. 주요 명령어:
+
+| 명령어 | 설명 |
+|---|---|
+| `/team 3:executor "작업 설명"` | 팀 모드 (단계별 파이프라인) |
+| `/autopilot "작업 설명"` | 자율 실행 모드 |
+| `/ralph "작업 설명"` | 완료 보장 루프 |
+| `/ultrawork "작업 설명"` | 최대 병렬 실행 |
+
+자세한 사용법: [oh-my-claudecode GitHub](https://github.com/Yeachan-Heo/oh-my-claudecode)
+
+### 6. validate.sh 통과 확인
 
 ```bash
 cd ..  # 프로젝트 루트
@@ -142,7 +166,7 @@ cd ..  # 프로젝트 루트
 
 기대 출력: `✅ 모든 검증 통과` (6단계 ruff/format/pyright/pytest/기획무결성/plan무결성).
 
-### 6. Claude Code 첫 prompt 시나리오
+### 7. Claude Code 첫 prompt 시나리오
 
 ```bash
 claude
