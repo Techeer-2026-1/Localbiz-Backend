@@ -64,13 +64,16 @@ PLACE_RECOMMEND 노드는 이미 `PG 정형 + OS k-NN + Gemini LLM Rerank` 하�
 ### `events_vector` 인덱스 구조
 
 `_source` 필드 (load_vectors.py L283-298 실측):
-```
+
+```text
 event_id(str) · title · description · embedding(768d) · category · district
 · date_start(isoformat|null) · date_end(isoformat|null) · source
 ```
+
 매핑 타입 (generate_os_structure.py L249-257 — 문서 기재값, 인덱스 생성 스크립트가
 리포에 없어 미검증. 단 본 설계는 매핑 타입에 무관):
-```
+
+```text
 embedding   knn_vector 768d (HNSW, nmslib 엔진, cosinesimil)
 date_start  date     date_end  date     category/district/event_id  keyword
 ```
@@ -87,7 +90,7 @@ detail_url·summary` 와 `is_deleted` 가 없다 → OS k-NN 결과는 모두 PG
 | #4 소프트 삭제 | PG 2차 보강 쿼리에 `is_deleted = FALSE` 명시 |
 | #7 임베딩 768d Gemini | `_embed_query_768d`가 `gemini-embedding-001` 768d. OpenAI 미사용 |
 | #8 파라미터 바인딩 | PG 2차 쿼리 `ANY($1::varchar[])` 바인딩, f-string SQL 금지 |
-| #9 타입 힌트 | `Optional[...]` 사용, `str | None` 금지 |
+| #9 타입 힌트 | `Optional[...]` 사용, PEP604 union(`str` 파이프 `None`) 문법 금지 |
 | #10 SSE 16종 | 신규 블록 없음 |
 | #11 블록 순서 | `events → text_stream → references` 순서 불변 (`_build_blocks` 미변경) |
 | #13 DB 우선→fallback | Naver는 PG∪OS 병합 < 3건 시에만 — DB(PG+OS) 우선 강화 |
@@ -107,7 +110,7 @@ CI/런타임 무영향. 모델↔빌더 정합화는 별도 정리 이슈 권장
 
 ### 4.0 검색 흐름 (변경 후)
 
-```
+```text
 processed_query (district/category/keywords/expanded_query/date_*_resolved)
   │
   ├─ ① PG 정형 검색         _search_pg()          [기존 유지]

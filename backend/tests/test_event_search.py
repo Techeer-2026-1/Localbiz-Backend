@@ -239,6 +239,47 @@ async def test_search_os_events_resolved_date_upper_bound() -> None:
     assert [r["event_id"] for r in results] == ["in-range"]
 
 
+async def test_search_os_events_resolved_date_lower_bound() -> None:
+    """resolved date 둘 다 있으면 date_end < date_start_resolved 행사 제외 (overlap 하한).
+
+    CodeRabbit 지적: today_iso 이후 종료지만 요청 기간보다 먼저 끝난 행사를 거른다.
+    """
+    from src.graph import event_search_node as mod  # pyright: ignore[reportMissingImports]
+
+    mock_os = AsyncMock()
+    mock_os.search.return_value = {
+        "hits": {
+            "hits": [
+                {
+                    "_id": "in-range",
+                    "_score": 0.9,
+                    "_source": {
+                        "event_id": "in-range",
+                        "title": "범위 내",
+                        "date_start": "2026-05-20",
+                        "date_end": "2026-05-25",
+                    },
+                },
+                {
+                    "_id": "too-early",
+                    "_score": 0.8,
+                    "_source": {
+                        "event_id": "too-early",
+                        "title": "요청 기간 이전 종료 (today 이후지만 범위 밖)",
+                        "date_start": "2026-05-01",
+                        "date_end": "2026-05-05",
+                    },
+                },
+            ]
+        }
+    }
+
+    with patch.object(mod, "_embed_query_768d", AsyncMock(return_value=[0.1] * 768)):
+        results = await mod._search_os_events(mock_os, "q", "key", "2026-04-30", "2026-05-19", "2026-05-30")
+
+    assert [r["event_id"] for r in results] == ["in-range"]
+
+
 async def test_search_os_events_zero_vector_skip() -> None:
     """임베딩이 zero-vector면 OS 검색 자체를 skip (빈 list, search 미호출)."""
     from src.graph import event_search_node as mod  # pyright: ignore[reportMissingImports]

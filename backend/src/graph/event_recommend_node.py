@@ -127,10 +127,10 @@ async def _search_os_events(
     events_vector(nmslib 엔진)는 k-NN 내부 filter 절을 지원하지 않으므로,
     _OS_CANDIDATE_K건을 over-fetch한 뒤 Python에서 date 조건으로 거른다.
 
-    date post-filter (불변식 #13 / #76 NULL 행사 제외와 일관):
-      - 항상: date_end >= today_iso (종료된 행사 제외, NULL date_end도 제외)
-      - date_start_resolved·date_end_resolved 둘 다 있을 때만:
-        date_start <= date_end_resolved 추가 (_search_pg overlap 조건 mirror)
+    date post-filter (_search_pg overlap 조건 mirror, date 앞 10자 사전식 비교):
+      - resolved date 둘 다 있을 때: date_end >= date_start_resolved
+        AND date_start <= date_end_resolved (overlap, NULL date는 제외)
+      - resolved date 없을 때: date_end >= today_iso (미종료 행사만, NULL 제외)
 
     Returns:
         date 유효 행사 상위 _OS_TOP_K건.
@@ -175,13 +175,21 @@ async def _search_os_events(
         for hit in hits:
             source = hit.get("_source", {})
 
-            # date post-filter — date 부분(앞 10자)만 사전식 비교
+            # date post-filter — _search_pg overlap 조건 mirror (date 앞 10자 사전식 비교)
             date_end = source.get("date_end")
-            if not date_end or str(date_end)[:10] < today_iso:
-                continue
+            date_start = source.get("date_start")
+            de = str(date_end)[:10] if date_end else ""
+            ds = str(date_start)[:10] if date_start else ""
+
             if date_start_resolved and date_end_resolved:
-                date_start = source.get("date_start")
-                if not date_start or str(date_start)[:10] > date_end_resolved[:10]:
+                # overlap: date_end >= start AND date_start <= end (NULL date는 제외)
+                if not de or de < date_start_resolved[:10]:
+                    continue
+                if not ds or ds > date_end_resolved[:10]:
+                    continue
+            else:
+                # resolved date 없을 때: 미종료 행사만 (date_end >= today)
+                if not de or de < today_iso:
                     continue
 
             events.append(
