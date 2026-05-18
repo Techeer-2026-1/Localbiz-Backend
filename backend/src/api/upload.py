@@ -90,7 +90,7 @@ async def _upload_to_gcs(
     try:
         import google.auth  # pyright: ignore[reportMissingImports]
         import google.auth.transport.requests  # pyright: ignore[reportMissingImports]
-        from google.cloud import storage  # pyright: ignore[reportMissingImports]
+        from google.cloud import storage  # pyright: ignore[reportMissingImports,reportAttributeAccessIssue]
     except ImportError as e:
         logger.error("google-cloud-storage 미설치: %s", e)
         raise HTTPException(
