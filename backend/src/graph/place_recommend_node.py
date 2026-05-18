@@ -95,8 +95,9 @@ async def _search_pg(
         sql += f" AND category ILIKE ${len(params)}"
 
     if neighborhood:
+        # 동/지역명으로 주소 검색만 (name ILIKE 제거 — 노이즈 방지)
         params.append(f"%{neighborhood}%")
-        sql += f" AND (address ILIKE ${len(params)} OR name ILIKE ${len(params)})"
+        sql += f" AND address ILIKE ${len(params)}"
 
     if keywords:
         params.append(f"%{keywords[0]}%")
@@ -120,19 +121,24 @@ async def _search_os_places(
     os_client: Any,
     query: str,
     api_key: str,
+    district: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """places_vector k-NN HNSW. expanded_query 임베딩 → 유사도 top-K."""
+    """places_vector k-NN HNSW. district 있으면 필터 적용."""
     try:
         query_vector = await _embed_query_768d(query, api_key)
+
+        knn_params: dict[str, Any] = {
+            "vector": query_vector,
+            "k": _OS_TOP_K,
+        }
+        if district:
+            knn_params["filter"] = {"term": {"district": district}}
 
         body: dict[str, Any] = {
             "size": _OS_TOP_K,
             "query": {
                 "knn": {
-                    "embedding": {
-                        "vector": query_vector,
-                        "k": _OS_TOP_K,
-                    }
+                    "embedding": knn_params,
                 }
             },
             "min_score": _OS_MIN_SCORE,
@@ -556,7 +562,7 @@ async def place_recommend_node(state: dict[str, Any]) -> dict[str, Any]:
         try:
             os_client = get_os_client()
             os_places_task = asyncio.create_task(
-                _search_os_places(os_client, expanded_query, settings.gemini_llm_api_key)
+                _search_os_places(os_client, expanded_query, settings.gemini_llm_api_key, district)
             )
             os_reviews_task = asyncio.create_task(
                 _search_os_reviews(os_client, condition_text, settings.gemini_llm_api_key)
