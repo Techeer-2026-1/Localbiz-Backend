@@ -127,18 +127,11 @@ async def _search_os_places(
     try:
         query_vector = await _embed_query_768d(query, api_key)
 
-        knn_params: dict[str, Any] = {
-            "vector": query_vector,
-            "k": _OS_TOP_K,
-        }
-        if district:
-            knn_params["filter"] = {"term": {"district": district}}
-
         body: dict[str, Any] = {
             "size": _OS_TOP_K,
             "query": {
                 "knn": {
-                    "embedding": knn_params,
+                    "embedding": {"vector": query_vector, "k": _OS_TOP_K},
                 }
             },
             "min_score": _OS_MIN_SCORE,
@@ -162,6 +155,9 @@ async def _search_os_places(
                     "score": hit.get("_score", 0),
                 }
             )
+        if district:
+            filtered = [p for p in places if p.get("district") == district]
+            return filtered if filtered else places
         return places
 
     except Exception:

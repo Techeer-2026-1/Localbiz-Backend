@@ -155,24 +155,20 @@ async def _search_os(
     api_key: str,
     district: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """places_vector k-NN 검색. district 있으면 필터 적용."""
+    """places_vector k-NN 검색. NMSLIB 엔진은 filter 미지원 → post-filter."""
     try:
         query_vector = await _embed_query_768d(query, api_key)
 
-        knn_params: dict[str, Any] = {"vector": query_vector, "k": _OS_TOP_K}
-        if district:
-            knn_params["filter"] = {"term": {"district": district}}
-
         body: dict[str, Any] = {
             "size": _OS_TOP_K,
-            "query": {"knn": {"embedding": knn_params}},
+            "query": {"knn": {"embedding": {"vector": query_vector, "k": _OS_TOP_K}}},
             "min_score": _OS_MIN_SCORE,
         }
 
         result = await os_client.search(index="places_vector", body=body)
         hits = result.get("hits", {}).get("hits", [])
 
-        return [
+        places = [
             {
                 "place_id": hit.get("_id", ""),
                 "name": hit.get("_source", {}).get("name", ""),
@@ -185,6 +181,10 @@ async def _search_os(
             }
             for hit in hits
         ]
+        if district:
+            filtered = [p for p in places if p.get("district") == district]
+            return filtered if filtered else places
+        return places
     except Exception:
         logger.exception("OS course search failed")
         return []
