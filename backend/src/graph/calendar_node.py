@@ -55,7 +55,7 @@ _CALENDAR_EXTRACT_PROMPT = """\
 }}
 
 규칙:
-- 오늘 날짜: {today}
+- 현재 일시(KST): {today}
 - 상대 날짜("내일", "이번 주 토요일" 등)는 오늘 기준으로 절대 날짜로 변환.
 - 시간은 KST(+09:00) 기준. 오전/오후 표현 그대로 반영.
 - 이벤트 제목은 키워드에서 자연스럽게 유추. 예) keywords=["경복궁"] → "경복궁 방문".
@@ -223,8 +223,8 @@ async def _extract_calendar_fields(
         logger.warning("calendar_node: GEMINI_LLM_API_KEY 미설정 — 필드 추출 생략")
         return {}
 
-    today = datetime.now(_KST).strftime("%Y-%m-%d")
-    system_prompt = _CALENDAR_EXTRACT_PROMPT.format(today=today)
+    now_kst = datetime.now(_KST).strftime("%Y-%m-%d %H:%M")
+    system_prompt = _CALENDAR_EXTRACT_PROMPT.format(today=now_kst)
 
     # 사용자 메시지 구성
     parts: list[str] = []
@@ -382,7 +382,7 @@ def _text_stream_block(
 
     return {
         "type": "text_stream",
-        "system": "Google Calendar 일정 추가 결과를 친절하게 안내하세요. 불필요한 내용은 추가하지 마세요.",
+        "system": "Google Calendar 일정 추가 결과를 친절하게 안내하세요. 불필요한 내용은 추가하지 마세요. 마크다운 강조(**) 없이 대화하듯 자연스럽게 답하세요.",
         "prompt": prompt,
     }
 
@@ -415,7 +415,7 @@ def _reask_block(prompt: str) -> dict[str, Any]:
     """필수 정보 부족 시 재질문용 text_stream 블록 생성."""
     return {
         "type": "text_stream",
-        "system": "캘린더 일정 추가를 위해 필요한 정보가 부족합니다. 친절하고 자연스럽게 추가 정보를 요청하세요.",
+        "system": "캘린더 일정 추가를 위해 필요한 정보가 부족합니다. 친절하고 자연스럽게 추가 정보를 요청하세요. 마크다운 강조(**) 없이 대화하듯 짧고 간결하게 답하세요.",
         "prompt": prompt,
     }
 
