@@ -49,7 +49,9 @@ _CALENDAR_EXTRACT_PROMPT = """\
   "event_title": "일정 제목 (문자열, 불명확하면 null)",
   "start_time": "ISO 8601 KST 예: 2026-05-02T14:00:00+09:00 (불명확하면 null)",
   "end_time": "ISO 8601 KST (언급 없으면 null)",
-  "location": "장소명 (언급 없으면 null)"
+  "location": "장소명 (언급 없으면 null)",
+  "description": "대화 맥락에서 파악한 장소 설명·코스 메모·특이사항 (없으면 null)",
+  "url": "대화에서 언급된 예약 URL 또는 장소 상세 링크 (없으면 null)"
 }}
 
 규칙:
@@ -133,6 +135,8 @@ async def calendar_node(state: AgentState) -> dict[str, Any]:
     start_time: Optional[str] = extracted.get("start_time")
     end_time: Optional[str] = extracted.get("end_time")
     location: Optional[str] = extracted.get("location")
+    description: Optional[str] = extracted.get("description")
+    url: Optional[str] = extracted.get("url")
 
     # 필수 필드 미입력 시 재질문 블록 반환
     if not event_title:
@@ -165,6 +169,8 @@ async def calendar_node(state: AgentState) -> dict[str, Any]:
             start_time=start_time,
             end_time=end_time,
             location=location,
+            description=description,
+            url=url,
         )
         status = "created"
     except _CalendarError as e:
@@ -176,7 +182,7 @@ async def calendar_node(state: AgentState) -> dict[str, Any]:
 
     return {
         "response_blocks": [
-            _text_stream_block(event_title, start_time, status),
+            _text_stream_block(event_title, start_time, status, end_time=end_time, location=location),
             _calendar_block(
                 event_title=event_title,
                 start_time=start_time,
@@ -314,6 +320,8 @@ async def _create_event(
     start_time: str,
     end_time: Optional[str],
     location: Optional[str],
+    description: Optional[str] = None,
+    url: Optional[str] = None,
 ) -> str:
     """Google Calendar API로 이벤트 생성 후 htmlLink 반환.
 
@@ -324,9 +332,14 @@ async def _create_event(
         "summary": event_title,
         "start": {"dateTime": start_time, "timeZone": "Asia/Seoul"},
         "end": {"dateTime": end_time, "timeZone": "Asia/Seoul"},
+        "extendedProperties": {"private": {"source": "localbiz"}},
     }
     if location:
         event_body["location"] = location
+    if description:
+        event_body["description"] = description
+    if url:
+        event_body["source"] = {"title": "AnyWay", "url": url}
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
@@ -349,10 +362,21 @@ def _add_one_hour(iso_time: str) -> Optional[str]:
         return None
 
 
-def _text_stream_block(event_title: str, start_time: str, status: str) -> dict[str, Any]:
+def _text_stream_block(
+    event_title: str,
+    start_time: str,
+    status: str,
+    end_time: Optional[str] = None,
+    location: Optional[str] = None,
+) -> dict[str, Any]:
     """이벤트 생성 결과 안내용 text_stream 블록 생성."""
     if status == "created":
-        prompt = f"'{event_title}' 일정을 Google Calendar에 추가했어요. ({start_time})"
+        details: list[str] = [start_time]
+        if end_time:
+            details.append(f"~{end_time}")
+        if location:
+            details.append(location)
+        prompt = f"'{event_title}' 일정을 Google Calendar에 추가했어요. ({', '.join(details)})"
     else:
         prompt = "죄송합니다. Google Calendar 일정 추가에 실패했습니다. 잠시 후 다시 시도해 주세요."
 
