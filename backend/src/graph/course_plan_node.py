@@ -134,8 +134,9 @@ async def _search_pg(
         sql += f" AND district = ${len(params)}"
 
     if neighborhood:
+        # 동/지역명으로 주소 검색만 (name ILIKE 제거 — 노이즈 방지)
         params.append(f"%{neighborhood}%")
-        sql += f" AND (address ILIKE ${len(params)} OR name ILIKE ${len(params)})"
+        sql += f" AND address ILIKE ${len(params)}"
 
     params.append(_PG_LIMIT)
     sql += f" LIMIT ${len(params)}"
@@ -152,14 +153,19 @@ async def _search_os(
     os_client: Any,
     query: str,
     api_key: str,
+    district: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """places_vector k-NN 검색."""
+    """places_vector k-NN 검색. district 있으면 필터 적용."""
     try:
         query_vector = await _embed_query_768d(query, api_key)
 
+        knn_params: dict[str, Any] = {"vector": query_vector, "k": _OS_TOP_K}
+        if district:
+            knn_params["filter"] = {"term": {"district": district}}
+
         body: dict[str, Any] = {
             "size": _OS_TOP_K,
-            "query": {"knn": {"embedding": {"vector": query_vector, "k": _OS_TOP_K}}},
+            "query": {"knn": {"embedding": knn_params}},
             "min_score": _OS_MIN_SCORE,
         }
 
@@ -198,9 +204,8 @@ async def _search_by_categories(
 
     for cat in categories:
         tasks.append(_search_pg(pool, district, cat, neighborhood))
-        # 카테고리별 OS 검색 — 카테고리 키워드를 포함한 쿼리로 분리
         if os_client and api_key:
-            tasks.append(_search_os(os_client, f"{expanded_query} {cat}", api_key))
+            tasks.append(_search_os(os_client, f"{expanded_query} {cat}", api_key, district))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -217,6 +222,83 @@ async def _search_by_categories(
                 merged.append(place)
 
     return merged
+
+
+# ---------------------------------------------------------------------------
+# ②-b LLM Rerank (코스 후보 적합도 순위)
+# ---------------------------------------------------------------------------
+_COURSE_RERANK_PROMPT = """\
+사용자의 코스 요청에 가장 적합한 장소를 골라 순위를 매겨주세요.
+
+## 판단 기준
+- 사용자가 구체적 장소명을 지정하지 않은 경우, 해당 카테고리에서 **일반 소비자가 기대하는 대표적·트렌디한 장소**를 우선하세요.
+- 학교 매점, 관공서, 프랜차이즈 건강식품 매장 등은 코스 추천 맥락에서 후순위로 밀어주세요.
+- 사용자가 특정 장소나 브랜드를 명시한 경우에는 그것을 우선하세요.
+
+JSON으로만 응답하세요:
+{"ranked_ids": ["가장 적합한 place_id", "두 번째", ...]}
+
+상위 10개만 포함하세요.
+"""
+
+
+async def _llm_rerank_candidates(
+    candidates: list[dict[str, Any]],
+    query: str,
+    categories: list[str],
+) -> list[dict[str, Any]]:
+    """Gemini로 코스 후보 적합도 rerank. 실패 시 원본 순서."""
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    from src.config import get_settings
+
+    settings = get_settings()
+    if not settings.gemini_llm_api_key or len(candidates) <= _MAX_STOPS:
+        return candidates
+
+    candidate_lines = "\n".join(
+        f"- id={c.get('place_id', '')}, name={c.get('name', '')}, "
+        f"category={c.get('category', '')}, district={c.get('district', '')}"
+        for c in candidates
+    )
+    user_prompt = f"사용자 요청: {query}\n카테고리: {', '.join(categories)}\n\n후보 장소:\n{candidate_lines}"
+
+    try:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=settings.gemini_llm_api_key,
+            temperature=0,
+        )
+        response = await llm.ainvoke([("system", _COURSE_RERANK_PROMPT), ("human", user_prompt)])
+        text = str(response.content).strip()
+
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+
+        result = json.loads(text)
+        ranked_ids: list[str] = result.get("ranked_ids", [])
+
+        id_to_candidate = {c.get("place_id", ""): c for c in candidates}
+        reranked: list[dict[str, Any]] = []
+        for pid in ranked_ids:
+            if pid in id_to_candidate:
+                reranked.append(id_to_candidate[pid])
+
+        # ranked_ids에 없는 후보도 원본 순서로 채움
+        seen = {c.get("place_id", "") for c in reranked}
+        for c in candidates:
+            if c.get("place_id", "") not in seen:
+                reranked.append(c)
+
+        logger.info("course rerank: %d candidates → top=%s", len(candidates), ranked_ids[:3])
+        return reranked
+
+    except Exception:
+        logger.exception("course LLM rerank failed → fallback to original order")
+        return candidates
 
 
 # ---------------------------------------------------------------------------
@@ -615,6 +697,9 @@ async def course_plan_node(state: dict[str, Any]) -> dict[str, Any]:
             ]
         }
 
+    # ②-b LLM Rerank (적합도 순위 재배치)
+    candidates = await _llm_rerank_candidates(candidates, query, categories)
+
     # ③ Greedy NN 경로 최적화
     route = _greedy_nn_route(candidates)
 
@@ -626,7 +711,7 @@ async def course_plan_node(state: dict[str, Any]) -> dict[str, Any]:
     blocks = _build_blocks(query, route, title, description, stop_details, course_id)
 
     logger.info(
-        "course_plan: categories=%s, candidates=%d, route=%d stops",
+        "course_plan: categories=%s, candidates=%d, reranked→route=%d stops",
         categories,
         len(candidates),
         len(route),
