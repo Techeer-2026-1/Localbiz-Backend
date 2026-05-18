@@ -108,11 +108,15 @@ def resolve_district(neighborhood: Optional[str]) -> Optional[str]:
     """
     if not neighborhood:
         return None
+    neighborhood = neighborhood.strip()
+    if not neighborhood:
+        return None
     # 정확 매칭 우선
     if neighborhood in NEIGHBORHOOD_TO_DISTRICT:
         return NEIGHBORHOOD_TO_DISTRICT[neighborhood]
-    # 부분 매칭 (예: "홍대앞" → "홍대" 매칭)
+    # 부분 매칭 — key가 입력에 포함된 경우만 (예: "홍대앞" → "홍대" 매칭)
+    # 역방향(neighborhood in key)은 과도한 매칭 위험으로 제거
     for key, district in NEIGHBORHOOD_TO_DISTRICT.items():
-        if key in neighborhood or neighborhood in key:
+        if key in neighborhood:
             return district
     return None

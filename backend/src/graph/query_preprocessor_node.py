@@ -266,10 +266,11 @@ async def query_preprocessor_node(state: dict[str, Any]) -> dict[str, Any]:
     processed = await _extract_query_fields(query, intent, conversation_history)
 
     # neighborhood → district 자동 추론 (Gemini가 district 미추출 시 geo_mapping 폴백)
-    if processed.get("neighborhood") and not processed.get("district"):
+    neighborhood = processed.get("neighborhood")
+    if isinstance(neighborhood, str) and neighborhood and not processed.get("district"):
         from src.utils.geo_mapping import resolve_district
 
-        inferred = resolve_district(processed["neighborhood"])
+        inferred = resolve_district(neighborhood)
         if inferred:
             processed["district"] = inferred
             logger.info(
