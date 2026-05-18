@@ -123,7 +123,7 @@ def _sync_upload_to_gcs(
         # GCE Workload Identity: private key 없이 IAM signBlob API로 서명
         credentials, _ = google.auth.default()
         auth_req = google.auth.transport.requests.Request()
-        credentials.refresh(auth_req)
+        credentials.refresh(auth_req)  # pyright: ignore[reportAttributeAccessIssue]
 
         signed_url: str = blob.generate_signed_url(
             expiration=timedelta(hours=_SIGNED_URL_HOURS),
