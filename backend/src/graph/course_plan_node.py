@@ -153,19 +153,14 @@ async def _search_os(
     os_client: Any,
     query: str,
     api_key: str,
-    district: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """places_vector k-NN 검색. district 있으면 필터 적용."""
+    """places_vector k-NN 검색."""
     try:
         query_vector = await _embed_query_768d(query, api_key)
 
-        knn_params: dict[str, Any] = {"vector": query_vector, "k": _OS_TOP_K}
-        if district:
-            knn_params["filter"] = {"term": {"district": district}}
-
         body: dict[str, Any] = {
             "size": _OS_TOP_K,
-            "query": {"knn": {"embedding": knn_params}},
+            "query": {"knn": {"embedding": {"vector": query_vector, "k": _OS_TOP_K}}},
             "min_score": _OS_MIN_SCORE,
         }
 
@@ -205,7 +200,7 @@ async def _search_by_categories(
     for cat in categories:
         tasks.append(_search_pg(pool, district, cat, neighborhood))
         if os_client and api_key:
-            tasks.append(_search_os(os_client, f"{expanded_query} {cat}", api_key, district))
+            tasks.append(_search_os(os_client, f"{expanded_query} {cat}", api_key))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -220,6 +215,12 @@ async def _search_by_categories(
             if pid and pid not in seen:
                 seen.add(pid)
                 merged.append(place)
+
+    # OS post-filter: district 매칭 (NMSLIB 엔진이 k-NN filter 미지원)
+    if district and merged:
+        filtered = [p for p in merged if p.get("district") == district]
+        if filtered:
+            merged = filtered
 
     return merged
 

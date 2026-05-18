@@ -121,24 +121,19 @@ async def _search_os_places(
     os_client: Any,
     query: str,
     api_key: str,
-    district: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """places_vector k-NN HNSW. district 있으면 필터 적용."""
+    """places_vector k-NN HNSW."""
     try:
         query_vector = await _embed_query_768d(query, api_key)
-
-        knn_params: dict[str, Any] = {
-            "vector": query_vector,
-            "k": _OS_TOP_K,
-        }
-        if district:
-            knn_params["filter"] = {"term": {"district": district}}
 
         body: dict[str, Any] = {
             "size": _OS_TOP_K,
             "query": {
                 "knn": {
-                    "embedding": knn_params,
+                    "embedding": {
+                        "vector": query_vector,
+                        "k": _OS_TOP_K,
+                    }
                 }
             },
             "min_score": _OS_MIN_SCORE,
@@ -562,7 +557,7 @@ async def place_recommend_node(state: dict[str, Any]) -> dict[str, Any]:
         try:
             os_client = get_os_client()
             os_places_task = asyncio.create_task(
-                _search_os_places(os_client, expanded_query, settings.gemini_llm_api_key, district)
+                _search_os_places(os_client, expanded_query, settings.gemini_llm_api_key)
             )
             os_reviews_task = asyncio.create_task(
                 _search_os_reviews(os_client, condition_text, settings.gemini_llm_api_key)
@@ -579,6 +574,13 @@ async def place_recommend_node(state: dict[str, Any]) -> dict[str, Any]:
     os_review_results: list[dict[str, Any]] = []
     if os_reviews_task is not None:
         os_review_results = await os_reviews_task
+
+    # OS post-filter: district 매칭 (NMSLIB 엔진이 k-NN filter 미지원)
+    if district:
+        if os_place_results:
+            os_place_results = [r for r in os_place_results if r.get("district") == district]
+        if os_review_results:
+            os_review_results = [r for r in os_review_results if r.get("district") == district]
 
     # ④ 병합
     candidates, review_data_map = await _merge_candidates(pool, pg_results, os_place_results, os_review_results)

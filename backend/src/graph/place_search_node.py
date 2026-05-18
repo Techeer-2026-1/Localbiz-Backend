@@ -127,24 +127,19 @@ async def _search_os(
     os_client: Any,
     query: str,
     api_key: str,
-    district: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """places_vector k-NN HNSW 검색. district 있으면 필터 적용."""
+    """places_vector k-NN HNSW 검색."""
     try:
         query_vector = await _embed_query_768d(query, api_key)
-
-        knn_params: dict[str, Any] = {
-            "vector": query_vector,
-            "k": _OS_TOP_K,
-        }
-        if district:
-            knn_params["filter"] = {"term": {"district": district}}
 
         body: dict[str, Any] = {
             "size": _OS_TOP_K,
             "query": {
                 "knn": {
-                    "embedding": knn_params,
+                    "embedding": {
+                        "vector": query_vector,
+                        "k": _OS_TOP_K,
+                    }
                 }
             },
             "min_score": _OS_MIN_SCORE,
@@ -383,7 +378,7 @@ async def place_search_node(state: dict[str, Any]) -> dict[str, Any]:
         try:
             os_client = get_os_client()
             search_text = expanded_query or query
-            os_task = asyncio.create_task(_search_os(os_client, search_text, settings.gemini_llm_api_key, district))
+            os_task = asyncio.create_task(_search_os(os_client, search_text, settings.gemini_llm_api_key))
         except RuntimeError:
             logger.warning("OpenSearch client not initialized, skipping vector search")
 
@@ -392,6 +387,10 @@ async def place_search_node(state: dict[str, Any]) -> dict[str, Any]:
     os_results: list[dict[str, Any]] = []
     if os_task is not None:
         os_results = await os_task
+
+    # OS post-filter: district 매칭 (NMSLIB 엔진이 k-NN filter 미지원)
+    if district and os_results:
+        os_results = [r for r in os_results if r.get("district") == district]
 
     # 병합
     results = _merge_results(pg_results, os_results)
