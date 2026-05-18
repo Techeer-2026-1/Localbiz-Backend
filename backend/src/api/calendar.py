@@ -53,6 +53,7 @@ async def list_calendar_events(
     time_min: Optional[str] = Query(None),
     time_max: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=250),
+    page_token: Optional[str] = Query(None),
     user_id: int = Depends(get_current_user_id),
 ) -> CalendarEventsResponse:
     """Google Calendar 이벤트 목록 조회. DB 미저장 — Google 직접 조회."""
@@ -75,13 +76,22 @@ async def list_calendar_events(
         "singleEvents": "true",
         "orderBy": "startTime",
     }
+    if page_token:
+        params["pageToken"] = page_token
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(
-            _GOOGLE_EVENTS_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-            params=params,
-        )
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                _GOOGLE_EVENTS_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+                params=params,
+            )
+    except httpx.RequestError as e:
+        logger.warning("calendar: events.list 네트워크 오류 user_id=%s: %s", user_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Google Calendar API 호출 실패",
+        ) from e
 
     if resp.status_code != 200:
         logger.warning("calendar: events.list 실패 status=%d user_id=%s", resp.status_code, user_id)
@@ -129,11 +139,18 @@ async def delete_calendar_event(
             detail="google_calendar_not_connected",
         ) from e
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.delete(
-            f"{_GOOGLE_EVENTS_URL}/{event_id}",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{_GOOGLE_EVENTS_URL}/{event_id}",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+    except httpx.RequestError as e:
+        logger.warning("calendar: events.delete 네트워크 오류 event_id=%s: %s", event_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Google Calendar API 호출 실패",
+        ) from e
 
     if resp.status_code == 404:
         raise HTTPException(

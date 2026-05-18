@@ -341,7 +341,7 @@ async def _create_event(
         event_body["location"] = location
     if description:
         event_body["description"] = description
-    if url:
+    if url and url.startswith(("http://", "https://")):
         event_body["source"] = {"title": "AnyWay", "url": url}
 
     async with httpx.AsyncClient(timeout=10.0) as client:
