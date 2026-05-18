@@ -48,7 +48,7 @@ async def test_upload_image_invalid_content_type() -> None:
     with pytest.raises(HTTPException) as exc:
         await upload_image(file=fake_file, user_id=_USER_ID)
 
-    assert exc.value.status_code == 422
+    assert exc.value.status_code == 422  # HTTP_422_UNPROCESSABLE_ENTITY
 
 
 @pytest.mark.asyncio
@@ -61,7 +61,7 @@ async def test_upload_image_too_large() -> None:
     with pytest.raises(HTTPException) as exc:
         await upload_image(file=fake_file, user_id=_USER_ID)
 
-    assert exc.value.status_code == 413
+    assert exc.value.status_code == 413  # HTTP_413_REQUEST_ENTITY_TOO_LARGE
 
 
 @pytest.mark.asyncio

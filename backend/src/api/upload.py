@@ -52,7 +52,7 @@ async def upload_image(
     content_type = file.content_type or ""
     if content_type not in _ALLOWED_CONTENT_TYPES:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="지원하지 않는 파일 형식입니다. jpg, png, webp만 가능합니다.",
         )
 
@@ -66,7 +66,7 @@ async def upload_image(
         total += len(chunk)
         if total > _MAX_BYTES:
             raise HTTPException(
-                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail="파일 크기가 10MB를 초과합니다.",
             )
         chunks.append(chunk)
