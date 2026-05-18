@@ -14,6 +14,7 @@ jobs:
           host: ${{ secrets.GCE_HOST }}
           username: ${{ secrets.GCE_USER }}
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          timeout: 60s
           command_timeout: 5m
           script: |
             set -euo pipefail
