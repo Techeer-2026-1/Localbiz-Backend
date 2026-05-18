@@ -188,7 +188,35 @@ Google OAuth refresh/access token 저장.
 
 ---
 
-## 11. 공유링크 (shared_links) — 0 row
+## 11. 장소 북마크 (place_bookmarks) — 0 row
+
+장소 단독 북마크. 대화 북마크(bookmarks)와 별도 테이블. 시점 스냅샷 보관. Phase 2.
+
+| # | 컬럼 | 한글명 | 타입 | PK | FK | NULL | 기본값 | 설명 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | bookmark_id | 북마크ID | BIGSERIAL | PK | | NO | auto | |
+| 2 | user_id | 사용자ID | BIGINT | | FK | NO | | → users ON DELETE CASCADE |
+| 3 | place_id | 장소ID | VARCHAR(100) | | | NO | | UUID 또는 gp_{google_place_id} |
+| 4 | name | 장소명 | VARCHAR(200) | | | NO | | 시점 스냅샷 |
+| 5 | category | 카테고리 | VARCHAR(50) | | | YES | | 시점 스냅샷 |
+| 6 | address | 주소 | TEXT | | | YES | | 시점 스냅샷 |
+| 7 | district | 자치구 | VARCHAR(50) | | | YES | | 시점 스냅샷 |
+| 8 | lat | 위도 | DOUBLE PRECISION | | | YES | | 시점 스냅샷 |
+| 9 | lng | 경도 | DOUBLE PRECISION | | | YES | | 시점 스냅샷 |
+| 10 | rating | 평점 | REAL | | | YES | | 시점 스냅샷 |
+| 11 | image_url | 이미지URL | TEXT | | | YES | | |
+| 12 | summary | 요약 | TEXT | | | YES | | 최대 500자 |
+| 13 | source_thread_id | 출처스레드ID | VARCHAR(100) | | | YES | | 발견 대화 추적 |
+| 14 | source_message_id | 출처메시지ID | BIGINT | | | YES | | 발견 메시지 추적 |
+| 15 | is_deleted | 삭제여부 | BOOLEAN | | | NO | false | 소프트 삭제 |
+| 16 | created_at | 생성일시 | TIMESTAMPTZ | | | NO | now() | |
+| 17 | deleted_at | 삭제일시 | TIMESTAMPTZ | | | YES | | 소프트 삭제 시각 |
+
+UNIQUE (user_id, place_id) — 중복 시 idempotent 200 반환.
+
+---
+
+## 12. 공유링크 (shared_links) — 0 row
 
 대화 공유 토큰. Phase 2.
 
@@ -223,7 +251,7 @@ AI 응답 평가. **append-only** (updated_at/is_deleted 없음). Phase 3.
 
 ---
 
-## FK 관계 (12개)
+## FK 관계 (13개)
 
 | FROM | FROM 컬럼 | TO | TO 컬럼 | ON DELETE |
 |---|---|---|---|---|
@@ -234,6 +262,7 @@ AI 응답 평가. **append-only** (updated_at/is_deleted 없음). Phase 3.
 | messages | thread_id | conversations | thread_id | CASCADE |
 | bookmarks | user_id | users | user_id | CASCADE |
 | bookmarks | message_id | messages | message_id | CASCADE |
+| place_bookmarks | user_id | users | user_id | CASCADE |
 | shared_links | user_id | users | user_id | CASCADE |
 | shared_links | from_message_id | messages | message_id | CASCADE |
 | shared_links | to_message_id | messages | message_id | CASCADE |

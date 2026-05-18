@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # --- Google OAuth (Auth #5 Google 로그인 PR에서 사용 예정) ---
     google_client_id: str = ""
 
+    # --- GCS (이미지 업로드 — feat/#103) ---
+    gcs_bucket_name: str = ""
+
     # --- Naver Open API (event_search_node — DB fallback 검색) ---
     naver_client_id: str = ""
     naver_client_secret: str = ""

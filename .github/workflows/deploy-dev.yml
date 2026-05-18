@@ -28,6 +28,7 @@ jobs:
             _upsert_env "GOOGLE_CALENDAR_CLIENT_ID" "${{ secrets.GOOGLE_CALENDAR_CLIENT_ID }}"
             _upsert_env "GOOGLE_CALENDAR_CLIENT_SECRET" "${{ secrets.GOOGLE_CALENDAR_CLIENT_SECRET }}"
             _upsert_env "GOOGLE_CALENDAR_REDIRECT_URI" "${{ secrets.GOOGLE_CALENDAR_REDIRECT_URI }}"
+            _upsert_env "GCS_BUCKET_NAME" "${{ secrets.GCS_BUCKET_NAME }}"
 
             # Docker 공식 apt repo 등록 + Compose V2 설치 (1회성)
             if ! docker compose version > /dev/null 2>&1; then

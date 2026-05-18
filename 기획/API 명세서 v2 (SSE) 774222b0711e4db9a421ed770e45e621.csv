@@ -161,3 +161,14 @@ AI 응답 피드백,,POST,Phase 2,,"Request Body:
   ""rating"": ""up""|""down"",
   ""comment"": ""string""|null }","Response (201 Created)
 { ""feedback_id"": ""uuid"", ""rating"", ""created_at"" }",/api/v1/feedback,,채팅,AI 응답에 피드백. 응답 품질 개선 데이터 수집용
+이미지 업로드,진행중,POST,Phase 1,,"Request Body:
+multipart/form-data
+{ file: 이미지 파일 (jpg/png/webp, 최대 10MB) }
+Authorization: Bearer {token}","Response (200 OK)
+{ ""image_url"": ""https://storage.googleapis.com/..."",
+  ""expires_in_seconds"": 3600 }
+
+• 지원 형식: jpg/png/webp
+• 최대 10MB
+• 1시간 유효 GCS signed URL
+• 오류: 422(미지원 형식) / 413(10MB 초과) / 503(GCS 미설정)",/api/v1/upload/image,강민서,이미지 검색,사용자 이미지를 GCS uploads/ 폴더에 업로드 후 1시간짜리 signed URL 반환. FE가 URL을 chat stream query에 포함 → image_search_node가 URL로 이미지 다운로드. feat/#103.
