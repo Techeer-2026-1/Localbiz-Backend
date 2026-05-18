@@ -37,7 +37,6 @@ cp .env.example .env  # Fill with 1Password values
 
 ### 1. Plan-Driven Workflow (Mandatory)
 Before writing code, you **MUST** create a plan in `.sisyphus/plans/{YYYY-MM-DD}-{slug}/plan.md`.
-- Use the `localbiz-plan` skill to manage this.
 - Implement only after the plan is marked as `최종 결정: APPROVED`.
 
 ### 2. 19 Data Model Invariants (Non-Negotiable)
@@ -49,14 +48,7 @@ The project enforces 19 strict rules to maintain data integrity. Key invariants 
 - **SSE Event Types**: 16 fixed types (intent, text, text_stream, place, places, events, course, etc.).
 - **Async Only**: Use `async def` and `await`. No sync wrappers or blocking calls.
 
-### 3. Safety Hooks
-The project uses custom hooks in `.claude/hooks/` to enforce standards:
-- `pre_edit_planning_mode`: Blocks edits if a plan is not approved.
-- `post_edit_python`: Automatically runs `ruff` and `pyright` after every edit.
-- `pre_bash_guard`: Prevents destructive commands like `rm -rf` or `git push --force`.
-- `intent_gate`: Routes user requests to appropriate skills.
-
-### 4. Source of Truth
+### 3. Source of Truth
 - **Specifications**: `기획/` directory contains CSVs for API/Function specs and MD for ERD.
 - **Rule Priorities**: `기획/` (Specs) > `CLAUDE.md` (Invariants) > `GEMINI.md`.
 
@@ -65,5 +57,4 @@ The project uses custom hooks in `.claude/hooks/` to enforce standards:
 - `backend/src/api/sse.py`: Core SSE streaming logic.
 - `backend/src/models/blocks.py`: Pydantic models for the 16 response block types.
 - `backend/scripts/etl/`: Data ingestion and vectorization pipelines.
-- `.claude/skills/`: Domain-specific agent skills (ERD guard, ETL, planning).
 - `.sisyphus/`: Permanent records of project plans and decisions.

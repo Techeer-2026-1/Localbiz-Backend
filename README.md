@@ -34,9 +34,9 @@ cd ..
 claude                    # → "places 테이블 컬럼 조회해줘" 입력
 ```
 
-**막히면**: [`docs/dev-environment.md`](docs/dev-environment.md) 트러블슈팅 / [`CONTRIBUTING.md` § Hook 차단](CONTRIBUTING.md#hook-troubleshooting) / PM 이정 DM.
+**막히면**: [`docs/dev-environment.md`](docs/dev-environment.md) 트러블슈팅 / [`CONTRIBUTING.md`](CONTRIBUTING.md) / PM 이정 DM.
 
-자세한 단계별 설명은 [§ 6단계 Onboarding](#6단계-onboarding-목표-60분).
+자세한 단계별 설명은 [§ 7단계 Onboarding](#7단계-onboarding-목표-60분).
 
 ---
 
@@ -67,10 +67,7 @@ AnyWay/
 ├── 기획/                      # source of truth (기획서 + ERD docx + AGENTS.md)
 ├── docs/
 │   └── dev-environment.md    # Cloud SQL Auth Proxy / GCE OS / 1Password 셋업
-├── .claude/                  # Claude Code 하네스
-│   ├── hooks/                # Phase 1-3 hooks (강제 가드)
-│   ├── skills/               # localbiz-* 스킬 + safe-destructive-ops
-│   ├── agents/               # metis, momus 서브에이전트
+├── .claude/                  # Claude Code 설정
 │   └── settings.json
 ├── .sisyphus/                # Phase 3 Prometheus Planning
 │   ├── plans/                # plan + reviews 영구 기록
@@ -176,7 +173,7 @@ claude
 
 > "places 테이블 컬럼 조회해줘"
 
-`localbiz-erd-guard` 스킬이 자동 발동되고, postgres MCP로 information_schema가 조회되면 onboarding 완료.
+postgres MCP로 information_schema가 조회되면 onboarding 완료.
 
 ---
 
@@ -184,29 +181,13 @@ claude
 
 ### 1. plan-driven workflow
 
-코드 작성 *전에* `.sisyphus/plans/{YYYY-MM-DD}-{slug}/plan.md` 작성 → Metis/Momus 검토 → APPROVED → 구현. `localbiz-plan` 스킬이 자동 발동.
+코드 작성 *전에* `.sisyphus/plans/{YYYY-MM-DD}-{slug}/plan.md` 작성 → APPROVED → 구현.
 
 ### 2. 19 데이터 모델 불변식
 
-[`CLAUDE.md`](CLAUDE.md) 의 19개 룰 (PK 이원화, append-only 4테이블, 임베딩 768d, Optional[str], SSE 이벤트 타입 16종, ...) 위반은 hook이 차단. PR 머지 전 체크리스트 필수.
+[`CLAUDE.md`](CLAUDE.md) 의 19개 룰 (PK 이원화, append-only 4테이블, 임베딩 768d, Optional[str], SSE 이벤트 타입 16종, ...) 위반은 PR 머지 거부. PR 머지 전 체크리스트 필수.
 
-### 3. plan-driven · 하네스 hook 구조
-
-| 단계 | Hook | 강제력 |
-|---|---|---|
-| 사용자 프롬프트 | `skill_router`, `intent_gate` | soft 인젝션 + planning_mode flag |
-| Edit/Write/MultiEdit 전 | `pre_edit_skill_check`, `pre_edit_planning_mode` | hard block |
-| Bash 전 | `pre_bash_guard` | destructive op 차단 (rm -rf $UNGUARDED, \|\| rm 등) |
-| Edit/Write 후 | `post_edit_python` | ruff + pyright + append-only SQL 차단 |
-| Skill 호출 후 | `skill_invocation_log` | pending 정리 |
-
-자세한 규약은 `.claude/hooks/*.sh` 상단 주석.
-
-### 4. 우회
-
-`/force` 키워드를 프롬프트에 포함하면 skill_router/intent_gate가 인젝션 스킵. 단, `pre_bash_guard`(destructive op)·`post_edit_python`(ruff/pyright)는 우회 불가 — 코드를 안전하게 분리해야 함.
-
-### 5. branch / commit 컨벤션
+### 3. branch / commit 컨벤션
 
 - 브랜치: `feat/`, `fix/`, `docs/`, `refactor/`, `chore/`, `test/`
 - 커밋: `feat: ...`, `fix: ...`, `docs: ...`, `refactor: ...`, `chore: ...`
@@ -224,15 +205,6 @@ claude
 ```bash
 cd backend && source venv/bin/activate && pip install -r requirements-dev.txt
 ```
-
-### Q. Claude Code hook이 내 Edit를 차단함
-
-차단 메시지 안내대로 진행:
-- `pre_edit_skill_check`: 메시지에 적힌 스킬을 Skill 도구로 호출
-- `pre_edit_planning_mode`: `.sisyphus/plans/.../plan.md`에 `최종 결정: APPROVED` 라인 추가하거나 사용자가 `/force` 입력
-- `pre_bash_guard`: 명령을 별도 호출로 분리하거나 `${VAR:?}` 가드 추가
-
-자세한 대처는 [`CONTRIBUTING.md` § Hook 차단 트러블슈팅](CONTRIBUTING.md#hook-troubleshooting).
 
 ### Q. postgres MCP가 연결 안 됨
 

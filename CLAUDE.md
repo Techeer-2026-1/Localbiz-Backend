@@ -36,7 +36,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **팀:** 이정(BE/PM) · 정조셉(BE) · 한정수(BE) · 강민서(BE) · 이정원(FE)
 **Source of truth:** `기획/ERD_테이블_컬럼_사전_v6.3.md` / `기획/API 명세서 *.csv` / `기획/기능 명세서 *.csv` / `기획/ETL_적재_현황.md` (상세: `기획/_legacy/서비스 통합 기획서 v2.md`)
-**하네스 단계:** Phase 1-5 완료. Phase 6 (KAIROS) 대기. `.claude/hooks/`가 ruff·pyright·append-only SQL 가드·skill routing·planning mode를 강제함.
+**개발 단계:** Phase 1-5 완료. Phase 6 (KAIROS) 대기.
 
 ## Common Commands
 
@@ -96,20 +96,9 @@ SSE → intent_router → query_preprocessor → (조건부 라우팅)
 | `src/tools/` | ReAct 에이전트 도구 (Phase 1 이후 생성 예정) |
 | `scripts/etl/` | ETL 스크립트 (`embed_utils.py`의 `embed_texts()` 공유) |
 
-### Hook Pipeline (`.claude/hooks/` — 수정 금지)
-
-| 시점 | Hook | 역할 |
-|---|---|---|
-| 사용자 프롬프트 | `skill_router`, `intent_gate` | 스킬 자동 발동 + planning mode 진입 |
-| Edit/Write 전 | `pre_edit_skill_check`, `pre_edit_planning_mode` | 스킬 미호출/plan 미승인 시 차단 |
-| Bash 전 | `pre_bash_guard` | destructive 명령 차단 (rm -rf, force push 등) |
-| Edit/Write 후 | `post_edit_python` | ruff + pyright 자동 실행 + append-only SQL 차단 |
-
-`/force` 키워드로 skill_router/intent_gate 스킵 가능. 단 pre_bash_guard, post_edit_python은 우회 불가.
-
 ### Plan-Driven Workflow
 
-코드 작성 전에 `.sisyphus/plans/{YYYY-MM-DD}-{slug}/plan.md` 작성 → Metis/Momus 검토 → APPROVED → 구현. `localbiz-plan` 스킬이 자동 발동.
+코드 작성 전에 `.sisyphus/plans/{YYYY-MM-DD}-{slug}/plan.md` 작성 → APPROVED → 구현.
 
 ### Extension Points
 
@@ -134,7 +123,7 @@ SSE → intent_router → query_preprocessor → (조건부 라우팅)
 
 1. **PK 이원화**: places/events만 UUID(VARCHAR(36)). 나머지 BIGINT AI. administrative_districts는 자연키. ※ place_analysis는 v2에서 DROP (런타임 lazy 전환).
 2. **PG↔OS 동기화**: place_id == places_vector._id (events / place_reviews 동일 패턴).
-3. **append-only 4테이블**: messages, population_stats, feedback, langgraph_checkpoints에 UPDATE/DELETE 금지. updated_at·is_deleted 칼럼 없음. (post_edit hook이 SQL 차단)
+3. **append-only 4테이블**: messages, population_stats, feedback, langgraph_checkpoints에 UPDATE/DELETE 금지. updated_at·is_deleted 칼럼 없음.
 4. **소프트 삭제**: 마스터/append-only/시계열/외부관리 테이블 제외. ERD §3 매트릭스가 source of truth.
 5. **의도적 비정규화 3건만 허용**: places.district / events.{district,place_name,address} / *.raw_data(JSONB). ※ place_analysis.place_name은 v2 DROP으로 삭제.
 6. **6개 지표 고정**: score_satisfaction/accessibility/cleanliness/value/atmosphere/expertise. 이름·개수 변경 금지.
@@ -156,10 +145,9 @@ SSE → intent_router → query_preprocessor → (조건부 라우팅)
 
 - `backend/` → 모듈 레이아웃·명령어·DB 스키마 상세는 `backend/AGENTS.md`.
 - `기획/` → source of truth. 작업 규약은 `기획/AGENTS.md`. 코드와 충돌 시 기획이 우선.
-- `.claude/hooks/` → Hard-constraint 훅. 수정 금지.
-- `.claude/skills/` → 스킬 (plan/erd-guard/validate/langgraph-node/etl-structured/etl-unstructured/memory-dream). 트리거 키워드는 각 SKILL.md 참조.
+- `.claude/` → `settings.json` / `settings.local.json`.
 - `.sisyphus/plans/` → plan-driven workflow 영구 기록.
-- `.mcp.json` → postgres MCP (read-only). erd-guard / etl 스킬이 information_schema 실측에 사용.
+- `.mcp.json` → postgres MCP (read-only). information_schema 실측에 사용.
 
 ## 코드리뷰 체크리스트 (PR 머지 전 확인)
 
@@ -174,7 +162,7 @@ SSE → intent_router → query_preprocessor → (조건부 라우팅)
 ## 절대 금지
 
 - `.env` 커밋/업로드/외부 전송 금지 (API 키 유출 방지). 읽기는 개발 중 허용. `.env` 수정/생성 시 사용자 승인 필수.
-- `git push --force`, `git reset --hard`, `--no-verify`, `docker-compose down -v` (pre_bash_guard가 차단)
+- `git push --force`, `git reset --hard`, `--no-verify`, `docker-compose down -v`
 - append-only 테이블 UPDATE/DELETE
 - f-string SQL / OpenAI 임베딩 / `str | None` 문법 / ORM 도입
 - 기획 문서를 코드 컨벤션에 맞춰 임의 수정
