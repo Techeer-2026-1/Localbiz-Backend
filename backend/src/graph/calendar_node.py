@@ -157,8 +157,9 @@ async def calendar_node(state: AgentState) -> dict[str, Any]:
         except ValueError:
             end_time = None
 
-    # end_time 미입력 시 1시간 자동 추가
-    if not end_time:
+    # end_time 미입력 시 1시간 자동 추가 (자동 설정 여부 기록)
+    end_time_auto = end_time is None
+    if end_time_auto:
         end_time = _add_one_hour(start_time)
 
     try:
@@ -182,7 +183,7 @@ async def calendar_node(state: AgentState) -> dict[str, Any]:
 
     return {
         "response_blocks": [
-            _text_stream_block(event_title, start_time, status, end_time=end_time, location=location),
+            _text_stream_block(event_title, start_time, status, end_time=end_time, location=location, end_time_auto=end_time_auto),
             _calendar_block(
                 event_title=event_title,
                 start_time=start_time,
@@ -368,6 +369,7 @@ def _text_stream_block(
     status: str,
     end_time: Optional[str] = None,
     location: Optional[str] = None,
+    end_time_auto: bool = False,
 ) -> dict[str, Any]:
     """이벤트 생성 결과 안내용 text_stream 블록 생성."""
     if status == "created":
@@ -376,7 +378,11 @@ def _text_stream_block(
             details.append(f"~{end_time}")
         if location:
             details.append(location)
-        prompt = f"'{event_title}' 일정을 Google Calendar에 추가했어요. ({', '.join(details)})"
+        time_info = ", ".join(details)
+        if end_time_auto:
+            prompt = f"'{event_title}' 일정을 Google Calendar에 추가했어요. 종료 시간을 말씀 안 하셔서 1시간으로 자동 설정했어요. ({time_info})"
+        else:
+            prompt = f"'{event_title}' 일정을 Google Calendar에 추가했어요. ({time_info})"
     else:
         prompt = "죄송합니다. Google Calendar 일정 추가에 실패했습니다. 잠시 후 다시 시도해 주세요."
 
