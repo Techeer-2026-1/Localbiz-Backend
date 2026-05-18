@@ -56,10 +56,9 @@ tmp/
 # ─── Claude Code 로컬 설정 ──────────────────────────────────────
 .claude/settings.local.json
 
-# ─── 하네스 (sisyphus) ──────────────────────────────────────────
-# plans/, notepads/, boulder.json, dependency-maps/ → 추적 (의사결정 기록)
-# state/ → 휘발성 런타임 상태 → 무시
-.sisyphus/state/
+# ─── OMC (oh-my-claudecode) ─────────────────────────────────────
+# 로컬 런타임 상태 (세션 로그, HUD 캐시, 에러 로그) → 무시
+.omc/
 
 # ─── 테스트 도구 (로컬 전용) ─────────────────────────────────────
 test_image_search.html

@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"cd /Users/ijeong/Desktop/상반기\\\\ 프로젝트/backend && gh issue create --repo Techeer-2026-1/LocalBiz-Seoul --title \\\"docs: backend README에 oh-my-claudecode 셋업 가이드 추가\\\" --label \\\"docs\\\" --body \\\"$...",
-  "error": "Exit code 1\ncould not add label: 'docs' not found",
-  "timestamp": "2026-05-18T12:01:16.129Z",
-  "retry_count": 1
-}
