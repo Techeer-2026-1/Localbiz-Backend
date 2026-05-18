@@ -1,13 +1,15 @@
 """event_recommend_node 단위 테스트.
 
-내부 헬퍼 함수 _naver_to_event_dict + _build_blocks를 직접 테스트.
-노드 함수(event_recommend_node)는 DB/Naver 의존성이 있으므로 머지 후 manual 검증.
+내부 헬퍼 함수 _naver_to_event_dict / _build_blocks / _search_os_events /
+_merge_candidates / _llm_rerank 를 직접 테스트.
+노드 함수(event_recommend_node)는 DB/OS/Naver 의존성이 있으므로 머지 후 manual 검증.
 event_search_node 테스트 양식과 일관 + EVENT_RECOMMEND 차별화 검증 추가.
 """
 
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -156,3 +158,258 @@ async def test_build_blocks_recommend_prompt_keywords() -> None:
     empty_blocks = _build_blocks("결과 없는 쿼리", [], [])
     empty_ts = next(b for b in empty_blocks if b["type"] == "text_stream")
     assert "추천" in empty_ts["prompt"] or "다른 조건" in empty_ts["prompt"]
+
+
+# ---------------------------------------------------------------------------
+# _search_os_events — events_vector k-NN + date post-filter
+# ---------------------------------------------------------------------------
+async def test_search_os_events_post_filter() -> None:
+    """date post-filter: 종료된 행사 / NULL date_end 제외, 미종료만 반환 (#110 G1b)."""
+    from src.graph import event_recommend_node as mod  # pyright: ignore[reportMissingImports]
+
+    mock_os = AsyncMock()
+    mock_os.search.return_value = {
+        "hits": {
+            "hits": [
+                {
+                    "_id": "e-future",
+                    "_score": 0.9,
+                    "_source": {
+                        "event_id": "e-future",
+                        "title": "미래 행사",
+                        "date_start": "2099-01-01",
+                        "date_end": "2099-12-31",
+                    },
+                },
+                {
+                    "_id": "e-past",
+                    "_score": 0.8,
+                    "_source": {
+                        "event_id": "e-past",
+                        "title": "지난 행사",
+                        "date_start": "1999-01-01",
+                        "date_end": "2000-01-01",
+                    },
+                },
+                {
+                    "_id": "e-null",
+                    "_score": 0.7,
+                    "_source": {"event_id": "e-null", "title": "날짜 없는 행사", "date_end": None},
+                },
+            ]
+        }
+    }
+
+    with patch.object(mod, "_embed_query_768d", AsyncMock(return_value=[0.1] * 768)):
+        results = await mod._search_os_events(mock_os, "전시", "key", "2026-05-18", None, None)
+
+    assert [r["event_id"] for r in results] == ["e-future"]
+
+
+async def test_search_os_events_resolved_date_upper_bound() -> None:
+    """resolved date 둘 다 있으면 date_start > date_end_resolved 행사 제외."""
+    from src.graph import event_recommend_node as mod  # pyright: ignore[reportMissingImports]
+
+    mock_os = AsyncMock()
+    mock_os.search.return_value = {
+        "hits": {
+            "hits": [
+                {
+                    "_id": "in-range",
+                    "_score": 0.9,
+                    "_source": {
+                        "event_id": "in-range",
+                        "title": "범위 내",
+                        "date_start": "2026-05-20",
+                        "date_end": "2026-05-25",
+                    },
+                },
+                {
+                    "_id": "too-late",
+                    "_score": 0.8,
+                    "_source": {
+                        "event_id": "too-late",
+                        "title": "범위 밖",
+                        "date_start": "2026-07-01",
+                        "date_end": "2026-07-10",
+                    },
+                },
+            ]
+        }
+    }
+
+    with patch.object(mod, "_embed_query_768d", AsyncMock(return_value=[0.1] * 768)):
+        results = await mod._search_os_events(mock_os, "q", "key", "2026-05-18", "2026-05-19", "2026-05-30")
+
+    assert [r["event_id"] for r in results] == ["in-range"]
+
+
+async def test_search_os_events_zero_vector_skip() -> None:
+    """임베딩이 zero-vector면 OS 검색 자체를 skip (빈 list, search 미호출)."""
+    from src.graph import event_recommend_node as mod  # pyright: ignore[reportMissingImports]
+
+    mock_os = AsyncMock()
+    with patch.object(mod, "_embed_query_768d", AsyncMock(return_value=[0.0] * 768)):
+        results = await mod._search_os_events(mock_os, "전시", "key", "2026-05-18", None, None)
+
+    assert results == []
+    mock_os.search.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _merge_candidates — PG 정형 + OS 의미 병합 + PG 2차 보강
+# ---------------------------------------------------------------------------
+def _pg_row(event_id: str, district: str) -> dict[str, Any]:
+    """PG 2차 보강 조회가 반환하는 행 양식."""
+    return {
+        "event_id": event_id,
+        "title": "행사",
+        "category": "공연",
+        "place_name": "홀",
+        "address": "서울",
+        "district": district,
+        "lat": 37.5,
+        "lng": 127.0,
+        "date_start": "2026-06-01",
+        "date_end": "2026-06-02",
+        "price": 0,
+        "poster_url": None,
+        "detail_url": "https://example.com/e",
+        "summary": "요약",
+        "source": "서울시문화행사",
+    }
+
+
+async def test_merge_candidates_os_enrichment() -> None:
+    """OS hit이 PG 2차 보강으로 표시 필드를 채운다 (#110 G1)."""
+    from src.graph.event_recommend_node import _merge_candidates  # pyright: ignore[reportMissingImports]
+
+    os_results = [{"event_id": "os-1", "title": "행사", "score": 0.9}]
+    mock_pool = AsyncMock()
+    mock_pool.fetch.return_value = [_pg_row("os-1", "중구")]
+
+    merged = await _merge_candidates(mock_pool, [], os_results)
+
+    assert len(merged) == 1
+    assert merged[0]["district"] == "중구"
+
+
+async def test_merge_candidates_discards_pg_absent() -> None:
+    """PG에 없는 OS hit(하드 삭제 등)은 폐기된다."""
+    from src.graph.event_recommend_node import _merge_candidates  # pyright: ignore[reportMissingImports]
+
+    os_results = [{"event_id": "ghost", "title": "삭제된 행사", "score": 0.9}]
+    mock_pool = AsyncMock()
+    mock_pool.fetch.return_value = []
+
+    merged = await _merge_candidates(mock_pool, [], os_results)
+
+    assert merged == []
+
+
+async def test_merge_candidates_pg_exception_graceful() -> None:
+    """PG 2차 조회 예외 시 PG 정형 결과로 graceful 진행 (OS 보강분 폐기)."""
+    from src.graph.event_recommend_node import _merge_candidates  # pyright: ignore[reportMissingImports]
+
+    pg_results = [{"event_id": "pg-1", "title": "정형 행사"}]
+    os_results = [{"event_id": "os-1", "title": "의미 행사", "score": 0.9}]
+    mock_pool = AsyncMock()
+    mock_pool.fetch.side_effect = Exception("DB error")
+
+    merged = await _merge_candidates(mock_pool, pg_results, os_results)
+
+    assert [m["event_id"] for m in merged] == ["pg-1"]
+
+
+async def test_merge_candidates_dedup_os_priority() -> None:
+    """동일 event_id가 OS·PG 양쪽에 있으면 1건으로 제거, OS 보강분 우선."""
+    from src.graph.event_recommend_node import _merge_candidates  # pyright: ignore[reportMissingImports]
+
+    os_results = [{"event_id": "dup", "title": "행사", "score": 0.9}]
+    pg_results = [{"event_id": "dup", "title": "행사", "district": "PG정형"}]
+    mock_pool = AsyncMock()
+    mock_pool.fetch.return_value = [_pg_row("dup", "OS보강")]
+
+    merged = await _merge_candidates(mock_pool, pg_results, os_results)
+
+    assert len(merged) == 1
+    assert merged[0]["district"] == "OS보강"
+
+
+# ---------------------------------------------------------------------------
+# _llm_rerank — Gemini Flash 순위 재배치 + per-event 추천 사유
+# ---------------------------------------------------------------------------
+async def test_llm_rerank_reorders_and_aligns_descriptions() -> None:
+    """ranked_indices 순서로 재배치 + descriptions를 reranked 순서에 정렬 (#110 G2)."""
+    from src.graph import event_recommend_node as mod  # pyright: ignore[reportMissingImports]
+
+    candidates = [{"event_id": f"e-{i}", "title": f"행사{i}"} for i in range(4)]
+    mock_settings = type("Settings", (), {"gemini_llm_api_key": "fake-key"})()
+
+    with (
+        patch("src.config.get_settings", return_value=mock_settings),
+        patch("langchain_google_genai.ChatGoogleGenerativeAI") as mock_llm_cls,
+    ):
+        mock_llm = AsyncMock()
+        mock_llm.ainvoke.return_value = type(
+            "R",
+            (),
+            {"content": '{"ranked_indices": [2, 0], "reasons": {"2": "이유2", "0": "이유0"}}'},
+        )()
+        mock_llm_cls.return_value = mock_llm
+        reranked, descriptions = await mod._llm_rerank(candidates, "쿼리", ["키워드"])
+
+    assert reranked[0]["event_id"] == "e-2"
+    assert reranked[1]["event_id"] == "e-0"
+    assert descriptions[0] == "이유2"
+    assert descriptions[1] == "이유0"
+    assert len(reranked) == 4
+    assert len(descriptions) == len(reranked)
+
+
+async def test_llm_rerank_fallback_on_error() -> None:
+    """Gemini 실패 시 병합 순서 상위 5건 + 빈 descriptions (graceful degradation)."""
+    from src.graph import event_recommend_node as mod  # pyright: ignore[reportMissingImports]
+
+    candidates = [{"event_id": f"e-{i}", "title": f"행사{i}"} for i in range(8)]
+    mock_settings = type("Settings", (), {"gemini_llm_api_key": "fake-key"})()
+
+    with (
+        patch("src.config.get_settings", return_value=mock_settings),
+        patch("langchain_google_genai.ChatGoogleGenerativeAI") as mock_llm_cls,
+    ):
+        mock_llm = AsyncMock()
+        mock_llm.ainvoke.side_effect = Exception("API error")
+        mock_llm_cls.return_value = mock_llm
+        reranked, descriptions = await mod._llm_rerank(candidates, "쿼리", [])
+
+    assert len(reranked) == 5
+    assert reranked[0]["event_id"] == "e-0"
+    assert descriptions == []
+
+
+async def test_llm_rerank_no_api_key() -> None:
+    """API 키 없을 때 병합 순서 상위 5건."""
+    from src.graph.event_recommend_node import _llm_rerank  # pyright: ignore[reportMissingImports]
+
+    candidates = [{"event_id": f"e-{i}", "title": f"행사{i}"} for i in range(8)]
+    mock_settings = type("Settings", (), {"gemini_llm_api_key": ""})()
+
+    with patch("src.config.get_settings", return_value=mock_settings):
+        reranked, descriptions = await _llm_rerank(candidates, "test", [])
+
+    assert len(reranked) == 5
+    assert descriptions == []
+
+
+async def test_llm_rerank_empty_candidates() -> None:
+    """빈 후보 → 빈 결과."""
+    from src.graph.event_recommend_node import _llm_rerank  # pyright: ignore[reportMissingImports]
+
+    mock_settings = type("Settings", (), {"gemini_llm_api_key": "fake-key"})()
+
+    with patch("src.config.get_settings", return_value=mock_settings):
+        reranked, descriptions = await _llm_rerank([], "test", [])
+
+    assert reranked == []
+    assert descriptions == []
