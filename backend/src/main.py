@@ -99,6 +99,7 @@ from src.api.auth import router as auth_router  # noqa: E402, I001  # pyright: i
 from src.api.bookmarks import router as bookmarks_router  # noqa: E402  # pyright: ignore[reportMissingImports]
 from src.api.place_bookmarks import router as place_bookmarks_router  # noqa: E402  # pyright: ignore[reportMissingImports]
 from src.api.chats import router as chats_router  # noqa: E402  # pyright: ignore[reportMissingImports]
+from src.api.calendar import router as calendar_events_router  # noqa: E402  # pyright: ignore[reportMissingImports]
 from src.api.google_calendar_auth import router as google_calendar_auth_router  # noqa: E402  # pyright: ignore[reportMissingImports]
 from src.api.share import router as share_router  # noqa: E402  # pyright: ignore[reportMissingImports]
 from src.api.sse import router as sse_router  # noqa: E402  # pyright: ignore[reportMissingImports]
@@ -111,6 +112,7 @@ app.include_router(bookmarks_router)  # /api/v1/users/me/bookmarks/* 엔드포�
 app.include_router(place_bookmarks_router)  # /api/v1/users/me/place-bookmarks/* 엔드포인트 3개
 app.include_router(chats_router)  # /api/v1/chats/* 엔드포인트 5개
 app.include_router(sse_router)  # /api/v1/chat/stream SSE 엔드포인트
+app.include_router(calendar_events_router)  # /api/v1/users/me/calendar/events GET/DELETE
 app.include_router(google_calendar_auth_router)  # /api/v1/auth/google/calendar OAuth 2종
 app.include_router(share_router)  # 공유 링크 3개
 app.include_router(upload_router)  # /api/v1/upload/image 이미지 업로드
