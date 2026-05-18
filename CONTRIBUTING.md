@@ -5,13 +5,12 @@
 
 ---
 
-## 0. 핵심 원칙 5개
+## 0. 핵심 원칙 4개
 
-1. **plan-driven** — 코드 짜기 전에 plan 작성. `localbiz-plan` 스킬이 자동 발동.
-2. **하네스 hook 우선** — Claude Code hooks가 ruff/pyright/append-only/destructive op를 hard block. 우회 금지.
-3. **기획 문서 권위** — 코드와 충돌 시 기획서가 옳음. 기획 변경은 plan으로.
-4. **19 불변식** — [`CLAUDE.md`](CLAUDE.md) 의 19개 룰. 위반 = 머지 거부.
-5. **destructive op 격리** — rm/mv/||/$VAR 같은 줄 금지. [상세](#hook-troubleshooting).
+1. **plan-driven** — 코드 짜기 전에 plan 작성.
+2. **기획 문서 권위** — 코드와 충돌 시 기획서가 옳음. 기획 변경은 plan으로.
+3. **19 불변식** — [`CLAUDE.md`](CLAUDE.md) 의 19개 룰. 위반 = 머지 거부.
+4. **destructive op 격리** — rm/mv/||/$VAR 같은 줄 금지.
 
 ---
 
@@ -26,16 +25,8 @@
 
 ### 1.2 plan 작성 (feature/non-trivial chore)
 
-```bash
-# Claude Code 세션 안에서:
-# "PLACE_RECOMMEND 노드 추가해줘" 같은 트리거 키워드 → localbiz-plan 자동 발동
-# 또는 명시적으로:
-/plan PLACE_RECOMMEND 노드 추가
-```
-
 생성 위치: `.sisyphus/plans/{YYYY-MM-DD}-{slug}/plan.md`
-검토: Metis (전술적 분석) → Momus (엄격한 검증) → APPROVED
-APPROVED 라인이 plan.md 마지막에 있어야 `pre_edit_planning_mode` hook이 코드 편집을 허용.
+APPROVED 라인이 plan.md 마지막에 있어야 코드 편집을 진행할 수 있음.
 
 ### 1.3 branch + commit
 
@@ -104,33 +95,12 @@ CI에서도 동일한 6단계가 실행됨 (`.github/workflows/validate.yml`).
 
 ---
 
-## 3. 하네스 hook 흐름
+## 3. <a name="hook-troubleshooting"></a>트러블슈팅
 
-| 시점 | Hook | 강제력 | 우회 |
-|---|---|---|---|
-| 사용자 프롬프트 | `skill_router` (UserPromptSubmit) | soft 인젝션 | `/force` |
-| 사용자 프롬프트 | `intent_gate` (UserPromptSubmit) | planning_mode flag 생성 | `/force` |
-| Bash 직전 | `pre_bash_guard` (PreToolUse Bash) | hard block (destructive op, --no-verify, etc.) | 우회 불가, 명령 분리 |
-| Edit/Write 직전 | `pre_edit_skill_check` (PreToolUse) | hard block (pending 스킬 미호출) | 해당 스킬 호출 |
-| Edit/Write 직전 | `pre_edit_planning_mode` (PreToolUse) | hard block (planning_mode 활성) | plan APPROVED 또는 `/force` |
-| Edit/Write 직후 | `post_edit_python` (PostToolUse) | hard block (ruff/pyright/append-only) | 코드 수정 |
-| Skill 호출 직후 | `skill_invocation_log` (PostToolUse) | pending 정리 | — |
+### destructive op 격리
 
----
+`&& ... || rm -rf` chain은 fail 시 fallback으로 destructive op가 실행될 수 있음 (2026-04-10 사고).
 
-## 4. <a name="hook-troubleshooting"></a>Hook 차단 트러블슈팅
-
-### 🚫 `pre_bash_guard` 차단 (destructive op)
-
-```
-[BLOCKED by pre_bash_guard]
-  명령: ... && rm -rf foo
-  위반 패턴: || 와 같은 줄의 rm/mv 금지
-```
-
-**원인**: `&& ... ||  rm -rf` chain이 fail 시 fallback으로 destructive op 실행됨 (2026-04-10 사고).
-
-**해결**:
 ```bash
 # ❌ 금지
 mkdir -p foo && do_thing || rm -rf foo
@@ -150,48 +120,15 @@ rm -rf $TARGET/old
 rm -rf "${TARGET:?TARGET must be set}/old"
 ```
 
-자세한 룰: `.claude/skills/safe-destructive-ops/REFERENCE.md`.
-
-### 🚫 `pre_edit_skill_check` 차단
-
-```
-[BLOCKED by Phase 2-bis pre_edit_skill_check]
-이 세션에서 다음 스킬이 트리거되었으나 아직 호출되지 않았습니다:
-  localbiz-plan, localbiz-erd-guard
-```
-
-**해결**: 메시지에 적힌 스킬을 Skill 도구로 호출 (Claude Code 세션 안에서). 호출 후 같은 Edit 재시도.
-
-명시적 우회: 사용자가 다음 프롬프트에 `/force` 입력.
-
-### 🚫 `pre_edit_planning_mode` 차단
-
-```
-[BLOCKED by Phase 3 pre_edit_planning_mode]
-PLANNING MODE 활성화 상태입니다.
-이 모드에서는 .sisyphus/, .claude/, memory/ 외 경로의 Edit/Write/MultiEdit이 차단됩니다.
-```
-
-**해결 1**: `.sisyphus/plans/{name}/plan.md` 작성 + Metis/Momus 리뷰 → 마지막 라인 `최종 결정: APPROVED` → 다음 Edit 호출 시 자동 해제.
-
-**해결 2**: 사용자가 `/force` 입력 (intent_gate가 flag 즉시 제거).
-
-### 🚫 `post_edit_python` 차단 (ruff/pyright/append-only SQL)
-
-```
-[BLOCKED] append-only 테이블에 UPDATE/DELETE를 작성했습니다.
-```
+### append-only 테이블 UPDATE/DELETE
 
 **해결**: 19 불변식 #3 — messages/feedback/population_stats/langgraph_checkpoints는 INSERT only. SQL을 INSERT로 바꾸거나 다른 테이블 사용.
 
-```
-[BLOCKED] ruff check 실패
-[BLOCKED] pyright 타입체크 실패
-```
+### ruff/pyright 실패
 
-**해결**: 위 메시지 안내대로 코드 수정. UP045(`X | None`) 발생 시 → CLAUDE.md 정책 `Optional[str]` 사용.
+코드 수정. UP045(`X | None`) 발생 시 → CLAUDE.md 정책 `Optional[str]` 사용.
 
-### 🚫 pre-commit hook fail
+### pre-commit hook fail
 
 ```bash
 cd backend
@@ -201,7 +138,7 @@ pre-commit run --all-files  # 로컬 진단
 
 ---
 
-## 5. 자주 묻는 것
+## 4. 자주 묻는 것
 
 ### Q. 빠른 1줄 fix인데도 plan 작성이 필요한가?
 
@@ -209,8 +146,6 @@ pre-commit run --all-files  # 로컬 진단
 - 19 불변식과 무관해야 함
 - ERD 영향 없어야 함
 - intent/응답 블록 변경 없어야 함
-
-이런 조건 *모두* 만족하면 `localbiz-plan` 스킬이 자동 발동해도 사용자가 `/force` 로 우회 가능.
 
 ### Q. main에 직접 push 하고 싶다
 
@@ -230,7 +165,7 @@ pre-commit run --all-files  # 로컬 진단
 
 ---
 
-## 6. 배포 체크리스트
+## 5. 배포 체크리스트
 
 ### Google Calendar OAuth 실배포 시 필수
 
@@ -251,12 +186,11 @@ GOOGLE_CALENDAR_REDIRECT_URI=https://실제도메인/api/v1/auth/google/calendar
 
 ---
 
-## 7. 참고
+## 6. 참고
 
-- `README.md` — 6단계 onboarding
+- `README.md` — 7단계 onboarding
 - `CLAUDE.md` — 19 불변식 + 절대 금지
 - `docs/dev-environment.md` — DB/OS 셋업
 - `기획/AGENTS.md` — 기획 문서 변경 규약
 - `backend/AGENTS.md` — backend 디렉터리 가이드
-- `.claude/skills/*/REFERENCE.md` — 각 스킬 상세 절차
 - `.sisyphus/plans/TEMPLATE/plan.md` — plan 양식
