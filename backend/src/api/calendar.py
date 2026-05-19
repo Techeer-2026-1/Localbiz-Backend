@@ -125,7 +125,7 @@ async def list_calendar_events(
     )
 
 
-@router.delete("/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_calendar_event(
     event_id: str,
     user_id: int = Depends(get_current_user_id),
