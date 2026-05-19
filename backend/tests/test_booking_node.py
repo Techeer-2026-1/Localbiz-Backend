@@ -272,6 +272,33 @@ async def test_cache_hit_skips_google_places_api() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tourist_category_with_dates_returns_accommodation_links() -> None:
+    """관광지 카테고리 + 날짜 있음 → 숙박 예약 링크 (yanolja/goodchoice)."""
+    pool_mock = _make_pool_mock(category="관광지")
+
+    with (
+        patch("src.graph.booking_node.get_pool", return_value=pool_mock),
+        patch("src.graph.booking_node.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.google_places_api_key = ""
+
+        state = {
+            "processed_query": {
+                "place_id": "uuid-009",
+                "place_name": "신라스테이 마포",
+                "check_in": "2026-05-22",
+                "check_out": "2026-05-23",
+            }
+        }
+        result = await booking_node(state)  # type: ignore[arg-type]
+
+    blocks = result["response_blocks"]
+    assert blocks[0]["type"] == "text_stream"
+    assert "yanolja.com" in blocks[0]["prompt"]
+    assert "goodchoice.kr" in blocks[0]["prompt"]
+
+
+@pytest.mark.asyncio
 async def test_unknown_category_returns_naver_fallback() -> None:
     """unknown 카테고리 → 네이버/카카오 fallback URL 포함."""
     pool_mock = _make_pool_mock(category="unknown")

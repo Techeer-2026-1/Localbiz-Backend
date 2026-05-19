@@ -108,22 +108,20 @@ async def booking_node(state: AgentState) -> dict[str, Any]:
         category = (row["category"] if row else "") or "unknown"
         phone = row["phone"] if row else None
         logger.info(
-            "booking_node: place_id=%s category=%s check_in=%s check_out=%s",
-            place_id,
+            "booking_node: has_place_id=True category=%s has_dates=%s",
             category,
-            check_in_val,
-            check_out_val,
+            bool(check_in_val and check_out_val),
         )
+        logger.debug("booking_node: place_id=%s check_in=%s check_out=%s", place_id, check_in_val, check_out_val)
     else:
         # place_id 없으면 processed_query의 category 사용
         category = pq.get("category", "") or "unknown"
         logger.info(
-            "booking_node: place_name=%s category=%s check_in=%s check_out=%s (no place_id)",
-            place_name,
+            "booking_node: has_place_id=False category=%s has_dates=%s",
             category,
-            check_in_val,
-            check_out_val,
+            bool(check_in_val and check_out_val),
         )
+        logger.debug("booking_node: place_name=%s check_in=%s check_out=%s", place_name, check_in_val, check_out_val)
 
     # ── 카테고리별 딥링크 생성 ────────────────────────────────────────────
     try:
@@ -159,7 +157,10 @@ async def _build_links(
     has_dates = bool(pq.get("check_in") and pq.get("check_out"))
 
     if any(c in cat for c in _UNAVAILABLE_CATS):
-        return _build_unavailable_message(category)
+        raise _BookingError(
+            f"'{category}' 카테고리는 온라인 예약 연동을 지원하지 않아요. "
+            "해당 장소에 직접 문의하시거나 네이버/카카오맵에서 검색해 보세요."
+        )
     elif any(c in cat for c in _RESTAURANT_CATS):
         return await _build_restaurant_links(place_name, phone)
     elif any(c in cat for c in _ACCOMMODATION_CATS):
@@ -296,14 +297,6 @@ def _build_tourist_links(place_name: str) -> str:
         f"🌐 [구글 검색](https://www.google.com/search?q={encoded}+예약)",
     ]
     return "\n".join(lines)
-
-
-def _build_unavailable_message(category: str) -> str:
-    """예약 연동 미지원 카테고리 안내."""
-    return (
-        f"'{category}' 카테고리는 온라인 예약 연동을 지원하지 않아요. "
-        "해당 장소에 직접 문의하시거나 네이버/카카오맵에서 검색해 보세요."
-    )
 
 
 def _build_fallback_links(place_name: str) -> str:
