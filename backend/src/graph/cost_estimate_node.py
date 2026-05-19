@@ -52,20 +52,20 @@ async def _fetch_blog_prices(
         logger.warning("cost_estimate: naver api key 미설정 → blog 조회 생략")
         return []
 
-    import httpx  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
 
     try:
-        async with httpx.AsyncClient(timeout=_NAVER_TIMEOUT) as client:
-            resp = await client.get(
-                _NAVER_BLOG_URL,
-                headers={
-                    "X-Naver-Client-Id": client_id,
-                    "X-Naver-Client-Secret": client_secret,
-                },
-                params={"query": f"{place_name} 가격", "display": _NAVER_DISPLAY, "sort": "sim"},
-            )
-            resp.raise_for_status()
-            items = resp.json().get("items", [])
+        data = await request_json(
+            "GET",
+            _NAVER_BLOG_URL,
+            headers={
+                "X-Naver-Client-Id": client_id,
+                "X-Naver-Client-Secret": client_secret,
+            },
+            params={"query": f"{place_name} 가격", "display": _NAVER_DISPLAY, "sort": "sim"},
+            timeout=_NAVER_TIMEOUT,
+        )
+        items = data.get("items", [])
     except Exception:
         logger.exception("cost_estimate: naver blog search 실패")
         return []

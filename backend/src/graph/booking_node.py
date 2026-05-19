@@ -19,7 +19,6 @@ import logging
 from typing import Any, Optional
 from urllib.parse import quote_plus  # 한글 장소명을 URL에 안전하게 인코딩
 
-import httpx
 from cachetools import TTLCache  # 인메모리 LRU+TTL 캐시
 
 from src.config import get_settings  # pyright: ignore[reportMissingImports]
@@ -200,23 +199,25 @@ async def _build_restaurant_links(place_name: str, db_phone: Optional[str]) -> s
 
     # Google Places API 호출 — 키가 있을 때만 시도
     if settings.google_places_api_key:
+        from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
+
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(
-                    _GOOGLE_PLACES_URL,
-                    headers={
-                        "X-Goog-Api-Key": settings.google_places_api_key,
-                        # FieldMask: 필요한 필드만 요청해서 비용 절감
-                        "X-Goog-FieldMask": "places.websiteUri,places.nationalPhoneNumber",
-                    },
-                    json={"textQuery": place_name, "languageCode": "ko"},
-                )
-            if resp.status_code == 200:
-                places = resp.json().get("places", [])
-                if places:
-                    p = places[0]
-                    website_uri = p.get("websiteUri")
-                    google_phone = p.get("nationalPhoneNumber")
+            data = await request_json(
+                "POST",
+                _GOOGLE_PLACES_URL,
+                headers={
+                    "X-Goog-Api-Key": settings.google_places_api_key,
+                    # FieldMask: 필요한 필드만 요청해서 비용 절감
+                    "X-Goog-FieldMask": "places.websiteUri,places.nationalPhoneNumber",
+                },
+                json={"textQuery": place_name, "languageCode": "ko"},
+                timeout=5.0,
+            )
+            places = data.get("places", [])
+            if places:
+                p = places[0]
+                website_uri = p.get("websiteUri")
+                google_phone = p.get("nationalPhoneNumber")
         except Exception:
             # 타임아웃/네트워크 오류 → URL 패턴 fallback (사용자에게 에러 노출 안 함)
             logger.warning("booking_node: Google Places API 실패 → fallback")

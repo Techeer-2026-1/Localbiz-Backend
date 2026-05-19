@@ -61,6 +61,8 @@ async def _fetch_place_pg(
     os_client: Any,
 ) -> Optional[dict[str, Any]]:
     """장소명 → PG places 조회. 동명 다중 매칭 시 OS stars 최댓값 채택."""
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
+
     rows = await pool.fetch(
         "SELECT place_id, name, category, district FROM places WHERE is_deleted = false AND name ILIKE $1 LIMIT 20",
         f"%{place_name}%",
@@ -79,10 +81,13 @@ async def _fetch_place_pg(
     place_ids = [row["place_id"] for row in rows]
     doc_ids = [f"review_{pid}" for pid in place_ids]
     try:
-        mget_resp = await os_client.mget(
-            body={"ids": doc_ids},
-            index="place_reviews",
-            _source=["stars", "place_id"],
+        mget_resp = await retry_call(
+            lambda: os_client.mget(
+                body={"ids": doc_ids},
+                index="place_reviews",
+                _source=["stars", "place_id"],
+            ),
+            attempts=3,
         )
         stars_map: dict[str, float] = {}
         for hit in mget_resp.get("docs", []):
@@ -106,12 +111,17 @@ async def _fetch_scores_os(
     Returns:
         (scores_dict, review_count). 문서 없으면 ({}, 0).
     """
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
+
     doc_id = f"review_{place_id}"
     try:
-        mget_resp = await os_client.mget(
-            body={"ids": [doc_id]},
-            index="place_reviews",
-            _source=["_raw_scores", "review_count", "place_id"],
+        mget_resp = await retry_call(
+            lambda: os_client.mget(
+                body={"ids": [doc_id]},
+                index="place_reviews",
+                _source=["_raw_scores", "review_count", "place_id"],
+            ),
+            attempts=3,
         )
         for hit in mget_resp.get("docs", []):
             if hit.get("found"):

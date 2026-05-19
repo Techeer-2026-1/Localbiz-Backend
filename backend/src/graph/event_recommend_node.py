@@ -37,7 +37,6 @@ Naver API:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 from datetime import date
@@ -90,7 +89,7 @@ _NAVER_BLOG_URL = "https://openapi.naver.com/v1/search/blog.json"
 # ---------------------------------------------------------------------------
 async def _embed_query_768d(query: str, api_key: str) -> list[float]:
     """Gemini embedding-001 768d 단건 임베딩. 불변식 #7."""
-    import httpx  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
 
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
     body = {
@@ -103,10 +102,7 @@ async def _embed_query_768d(query: str, api_key: str) -> list[float]:
         "x-goog-api-key": api_key,
     }
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(url, json=body, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
+    data = await request_json("POST", url, json=body, headers=headers, timeout=10)
 
     return data.get("embedding", {}).get("values", [0.0] * 768)
 
@@ -138,6 +134,8 @@ async def _search_os_events(
           "date_end", "source", "score"}]
         실패 시 빈 list (graceful degradation).
     """
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
+
     try:
         query_vector = await _embed_query_768d(query, api_key)
 
@@ -168,7 +166,7 @@ async def _search_os_events(
             ],
         }
 
-        result = await os_client.search(index="events_vector", body=body)
+        result = await retry_call(lambda: os_client.search(index="events_vector", body=body), attempts=3)
         hits = result.get("hits", {}).get("hits", [])
 
         events: list[dict[str, Any]] = []
@@ -315,7 +313,7 @@ async def _search_naver(
         logger.warning("naver recommend skipped: client_id or client_secret empty")
         return []
 
-    import httpx  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
 
     headers = {
         "X-Naver-Client-Id": client_id,
@@ -328,10 +326,7 @@ async def _search_naver(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=_NAVER_TIMEOUT) as client:
-            resp = await client.get(_NAVER_BLOG_URL, headers=headers, params=params)
-            resp.raise_for_status()
-            data = resp.json()
+        data = await request_json("GET", _NAVER_BLOG_URL, headers=headers, params=params, timeout=_NAVER_TIMEOUT)
         return list(data.get("items", []))
     except Exception:
         logger.exception("naver event recommend failed (graceful degradation)")
@@ -458,6 +453,8 @@ async def _llm_rerank(
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     from src.config import get_settings
+    from src.utils.llm_parsing import parse_llm_json  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
 
     settings = get_settings()
     if not settings.gemini_llm_api_key or not candidates:
@@ -478,22 +475,19 @@ async def _llm_rerank(
             temperature=0,
         )
 
-        response = await llm.ainvoke(
-            [
-                ("system", _RERANK_SYSTEM_PROMPT),
-                ("human", user_prompt),
-            ]
+        response = await retry_call(
+            lambda: llm.ainvoke(
+                [
+                    ("system", _RERANK_SYSTEM_PROMPT),
+                    ("human", user_prompt),
+                ]
+            ),
+            attempts=3,
         )
         text = str(response.content).strip()
 
-        # Gemini ```json ... ``` 래핑 처리
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-
-        result = json.loads(text)
+        # parse_llm_json: 코드펜스 제거 + json.loads
+        result = parse_llm_json(text)
         ranked_indices: list[Any] = result.get("ranked_indices", [])
         reasons: dict[str, str] = result.get("reasons", {})
 

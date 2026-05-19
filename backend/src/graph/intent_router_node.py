@@ -162,11 +162,11 @@ async def classify_intents(
     Returns:
         [(IntentType, confidence, sub_query), ...]. 최소 1개 보장.
     """
-    import json
-
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     from src.config import get_settings  # pyright: ignore[reportMissingImports]
+    from src.utils.llm_parsing import parse_llm_json  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
 
     settings = get_settings()
     if not settings.gemini_llm_api_key:
@@ -191,16 +191,10 @@ async def classify_intents(
 
         messages.append(("human", query))
 
-        response = await llm.ainvoke(messages)
+        response = await retry_call(lambda: llm.ainvoke(messages), attempts=3)
         text = str(response.content).strip()
 
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-
-        result = json.loads(text)
+        result = parse_llm_json(text)
         raw_intents = result.get("intents", [])
         if not isinstance(raw_intents, list) or len(raw_intents) == 0:
             return [(_GENERAL_FALLBACK, 0.0, query)]
@@ -260,11 +254,11 @@ async def classify_intent(
     Returns:
         (intent, confidence) 튜플.
     """
-    import json
-
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     from src.config import get_settings  # pyright: ignore[reportMissingImports]
+    from src.utils.llm_parsing import parse_llm_json  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
 
     settings = get_settings()
     if not settings.gemini_llm_api_key:
@@ -290,18 +284,11 @@ async def classify_intent(
 
         messages.append(("human", query))
 
-        response = await llm.ainvoke(messages)
+        response = await retry_call(lambda: llm.ainvoke(messages), attempts=3)
         text = str(response.content).strip()
 
-        # JSON 파싱
-        # Gemini가 ```json ... ``` 래핑할 수 있음
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-
-        result = json.loads(text)
+        # JSON 파싱 (parse_llm_json: 코드펜스 제거 + json.loads)
+        result = parse_llm_json(text)
         intent_str = result.get("intent", "GENERAL")
         confidence = float(result.get("confidence", 0.0))
 

@@ -31,6 +31,8 @@ async def init_pool() -> asyncpg.Pool:  # type: ignore[type-arg]
         password=settings.db_password,
         min_size=2,
         max_size=10,
+        # 쿼리당 타임아웃(초) — DB 장애 시 무한 대기 방지 (#124 안정성 고도화)
+        command_timeout=10,
     )
     return _pool
 
