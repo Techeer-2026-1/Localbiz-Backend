@@ -19,7 +19,6 @@ ST_DWithin 공간 필터는 AgentState에 user_location 추가 후 도입 예정
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
 import uuid
@@ -50,7 +49,7 @@ _PG_LIMIT = 10
 # ---------------------------------------------------------------------------
 async def _embed_query_768d(query: str, api_key: str) -> list[float]:
     """Gemini embedding-001 768d 단건 임베딩. 불변식 #7."""
-    import httpx
+    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
 
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
     body = {
@@ -63,10 +62,7 @@ async def _embed_query_768d(query: str, api_key: str) -> list[float]:
         "x-goog-api-key": api_key,
     }
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(url, json=body, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
+    data = await request_json("POST", url, json=body, headers=headers, timeout=10)
 
     values = data.get("embedding", {}).get("values")
     if not values:
@@ -156,6 +152,8 @@ async def _search_os(
     district: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """places_vector k-NN 검색. NMSLIB 엔진은 filter 미지원 → post-filter."""
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
+
     try:
         query_vector = await _embed_query_768d(query, api_key)
 
@@ -165,7 +163,7 @@ async def _search_os(
             "min_score": _OS_MIN_SCORE,
         }
 
-        result = await os_client.search(index="places_vector", body=body)
+        result = await retry_call(lambda: os_client.search(index="places_vector", body=body), attempts=3)
         hits = result.get("hits", {}).get("hits", [])
 
         places = [
@@ -251,6 +249,8 @@ async def _llm_rerank_candidates(
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     from src.config import get_settings
+    from src.utils.llm_parsing import parse_llm_json  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
 
     settings = get_settings()
     if not settings.gemini_llm_api_key or len(candidates) <= _MAX_STOPS:
@@ -269,16 +269,13 @@ async def _llm_rerank_candidates(
             google_api_key=settings.gemini_llm_api_key,
             temperature=0,
         )
-        response = await llm.ainvoke([("system", _COURSE_RERANK_PROMPT), ("human", user_prompt)])
+        response = await retry_call(
+            lambda: llm.ainvoke([("system", _COURSE_RERANK_PROMPT), ("human", user_prompt)]),
+            attempts=3,
+        )
         text = str(response.content).strip()
 
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-
-        result = json.loads(text)
+        result = parse_llm_json(text)
         ranked_ids: list[str] = result.get("ranked_ids", [])
 
         id_to_candidate = {c.get("place_id", ""): c for c in candidates}
@@ -392,6 +389,8 @@ async def _llm_course_compose(
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     from src.config import get_settings
+    from src.utils.llm_parsing import parse_llm_json  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
 
     settings = get_settings()
     if not settings.gemini_llm_api_key or not route:
@@ -409,21 +408,18 @@ async def _llm_course_compose(
             temperature=0,
         )
 
-        response = await llm.ainvoke(
-            [
-                ("system", _COURSE_COMPOSE_PROMPT),
-                ("human", f"사용자 요청: {query}\n\n경유 장소 (순서대로):\n{place_lines}"),
-            ]
+        response = await retry_call(
+            lambda: llm.ainvoke(
+                [
+                    ("system", _COURSE_COMPOSE_PROMPT),
+                    ("human", f"사용자 요청: {query}\n\n경유 장소 (순서대로):\n{place_lines}"),
+                ]
+            ),
+            attempts=3,
         )
         text = str(response.content).strip()
 
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-
-        result = json.loads(text)
+        result = parse_llm_json(text)
         if not isinstance(result, dict):
             logger.warning("LLM course compose: 응답이 dict 아님 → fallback")
             return None, None, []

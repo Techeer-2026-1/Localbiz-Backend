@@ -99,6 +99,8 @@ async def _extract_query_fields(
     from langchain_google_genai import ChatGoogleGenerativeAI  # pyright: ignore[reportMissingImports]
 
     from src.config import get_settings  # pyright: ignore[reportMissingImports]
+    from src.utils.llm_parsing import parse_llm_json  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
 
     settings = get_settings()
     if not settings.gemini_llm_api_key:
@@ -127,17 +129,11 @@ async def _extract_query_fields(
 
         messages.append(("human", query))
 
-        response = await llm.ainvoke(messages)
+        response = await retry_call(lambda: llm.ainvoke(messages), attempts=3)
         text = str(response.content).strip()
 
-        # Gemini가 ```json ... ``` 래핑할 수 있음
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-
-        result = json.loads(text)
+        # parse_llm_json: 코드펜스 제거 + json.loads
+        result = parse_llm_json(text)
 
         # 필수 필드 보장
         if not isinstance(result, dict):

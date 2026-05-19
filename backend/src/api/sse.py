@@ -191,6 +191,10 @@ async def _insert_message(
 async def _stream_gemini(system_prompt: str, user_prompt: str) -> AsyncIterator[str]:
     """Gemini 2.5 Flash로 토큰 단위 스트리밍.
 
+    재시도(retry) 미적용 (#124): 스트림 도중 실패 시 이미 전송된 토큰을
+    되돌릴 수 없어 재시도하면 토큰이 중복 출력된다. 호출부(event_generator)가
+    예외를 잡아 GEMINI_API_ERROR로 graceful 처리한다.
+
     Yields:
         각 토큰 문자열 (delta).
     """
@@ -260,8 +264,9 @@ async def chat_stream(
                 user_id = int(payload["sub"])
             except Exception:
                 logger.info("SSE JWT decode failed: thread_id=%s", thread_id)
-                yield format_error_event("AUTH_INVALID", "유효하지 않은 인증 토큰입니다.", recoverable=False)
-                yield format_done_event(status="error", error_message="유효하지 않은 인증 토큰입니다.")
+                _msg = "유효하지 않은 인증 토큰입니다. 다시 로그인해 주세요."
+                yield format_error_event("AUTH_INVALID", _msg, recoverable=False)
+                yield format_done_event(status="error", error_message=_msg)
                 return
 
             # 1. DB 준비 — conversation auto-create
@@ -429,18 +434,21 @@ async def chat_stream(
             if cancelled:
                 yield format_done_event(status="cancelled")
             elif gemini_error:
-                yield format_error_event("GEMINI_API_ERROR", "AI 응답 생성에 실패했습니다.", recoverable=True)
-                yield format_done_event(status="error", error_message="AI 응답 생성에 실패했습니다.")
+                _msg = "AI 응답 생성에 일시적으로 실패했습니다. 잠시 후 다시 시도해 주세요."
+                yield format_error_event("GEMINI_API_ERROR", _msg, recoverable=True)
+                yield format_done_event(status="error", error_message=_msg)
             elif not persistence_success:
-                yield format_error_event("PERSISTENCE_ERROR", "응답 저장에 실패했습니다.", recoverable=True)
-                yield format_done_event(status="error", error_message="응답 저장에 실패했습니다.")
+                _msg = "응답 저장에 실패했습니다. 대화 내역에 남지 않을 수 있습니다."
+                yield format_error_event("PERSISTENCE_ERROR", _msg, recoverable=True)
+                yield format_done_event(status="error", error_message=_msg)
             else:
                 yield format_done_event(status="done", message_id=assistant_message_id)
 
         except Exception:
             logger.exception("SSE error: thread_id=%s", thread_id)
-            yield format_error_event("INTERNAL_ERROR", "서버 내부 오류가 발생했습니다.", recoverable=True)
-            yield format_done_event(status="error", error_message="서버 내부 오류가 발생했습니다.")
+            _msg = "서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+            yield format_error_event("INTERNAL_ERROR", _msg, recoverable=True)
+            yield format_done_event(status="error", error_message=_msg)
 
     return StreamingResponse(
         event_generator(),

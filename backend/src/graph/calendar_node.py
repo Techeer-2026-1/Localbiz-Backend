@@ -221,6 +221,9 @@ async def _extract_calendar_fields(
 
     from langchain_google_genai import ChatGoogleGenerativeAI  # pyright: ignore[reportMissingImports]
 
+    from src.utils.llm_parsing import parse_llm_json  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
+
     settings = get_settings()
     if not settings.gemini_llm_api_key:
         logger.warning("calendar_node: GEMINI_LLM_API_KEY 미설정 — 필드 추출 생략")
@@ -247,20 +250,18 @@ async def _extract_calendar_fields(
             google_api_key=settings.gemini_llm_api_key,
             temperature=0,
         )
-        response = await llm.ainvoke(
-            [
-                ("system", system_prompt),
-                ("human", user_content),
-            ]
+        response = await retry_call(
+            lambda: llm.ainvoke(
+                [
+                    ("system", system_prompt),
+                    ("human", user_content),
+                ]
+            ),
+            attempts=3,
         )
         raw = str(response.content).strip()
-        # 마크다운 코드 블록 제거
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-        result: dict[str, Any] = json.loads(raw)
+        # parse_llm_json: 코드펜스 제거 + json.loads
+        result: dict[str, Any] = parse_llm_json(raw)
         return result
     except Exception:
         logger.exception("calendar_node: 캘린더 필드 추출 실패")
@@ -297,8 +298,11 @@ async def _get_access_token(user_id: int) -> str:
         raise _CalendarError("Google Calendar 연동이 필요합니다. Google 계정으로 로그인해 주세요.")
 
     settings = get_settings()
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
+    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
+
+    try:
+        data = await request_json(
+            "POST",
             _GOOGLE_TOKEN_URL,
             data={
                 "client_id": settings.google_calendar_client_id,
@@ -306,13 +310,13 @@ async def _get_access_token(user_id: int) -> str:
                 "refresh_token": row["refresh_token"],
                 "grant_type": "refresh_token",
             },
+            timeout=10.0,
         )
-
-    if resp.status_code != 200:
-        logger.warning("calendar_node: access_token 발급 실패 status=%d", resp.status_code)
+    except Exception:
+        logger.warning("calendar_node: access_token 발급 실패")
         raise _CalendarError("Google Calendar 연동에 실패했습니다. 다시 시도해 주세요.")
 
-    access_token: str = resp.json()["access_token"]
+    access_token: str = data["access_token"]
     _token_cache[user_id] = access_token
     return access_token
 

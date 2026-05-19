@@ -123,6 +123,9 @@ async def _analyze_vision(b64_image: str, api_key: str) -> dict[str, Any]:
     from langchain_core.messages import HumanMessage, SystemMessage  # pyright: ignore[reportMissingImports]
     from langchain_google_genai import ChatGoogleGenerativeAI  # pyright: ignore[reportMissingImports]
 
+    from src.utils.llm_parsing import parse_llm_json  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
+
     _default: dict[str, Any] = {
         "place_candidates": [],
         "main_candidate": None,
@@ -138,28 +141,26 @@ async def _analyze_vision(b64_image: str, api_key: str) -> dict[str, Any]:
             google_api_key=api_key,
             temperature=0,
         )
-        response = await llm.ainvoke(
-            [
-                SystemMessage(content=_VISION_SYSTEM_PROMPT),
-                HumanMessage(
-                    content=[
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"},
-                        },
-                        {"type": "text", "text": _VISION_USER_PROMPT},
-                    ]
-                ),
-            ]
+        response = await retry_call(
+            lambda: llm.ainvoke(
+                [
+                    SystemMessage(content=_VISION_SYSTEM_PROMPT),
+                    HumanMessage(
+                        content=[
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"},
+                            },
+                            {"type": "text", "text": _VISION_USER_PROMPT},
+                        ]
+                    ),
+                ]
+            ),
+            attempts=3,
         )
         text = str(response.content).strip()
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
 
-        result = json.loads(text)
+        result = parse_llm_json(text)
         return {
             "place_candidates": result.get("place_candidates") or [],
             "main_candidate": result.get("main_candidate"),
@@ -224,7 +225,7 @@ async def _search_pg(pool: Any, name: str) -> list[dict[str, Any]]:
 
 async def _embed_768d(text: str, api_key: str) -> list[float]:
     """Gemini embedding-001 768d 임베딩. 불변식 #7."""
-    import httpx  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
 
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
     body = {
@@ -233,22 +234,21 @@ async def _embed_768d(text: str, api_key: str) -> list[float]:
         "outputDimensionality": 768,
     }
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(url, json=body, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
+    data = await request_json("POST", url, json=body, headers=headers, timeout=10)
     return data.get("embedding", {}).get("values", [0.0] * 768)
 
 
 async def _search_knn(os_client: Any, vector: list[float]) -> list[str]:
     """places_vector k-NN HNSW 검색 → place_id 목록."""
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
+
     try:
         body: dict[str, Any] = {
             "size": _OS_TOP_K,
             "query": {"knn": {"embedding": {"vector": vector, "k": _OS_TOP_K}}},
             "min_score": _OS_MIN_SCORE,
         }
-        result = await os_client.search(index="places_vector", body=body)
+        result = await retry_call(lambda: os_client.search(index="places_vector", body=body), attempts=3)
         return [h.get("_id", "") for h in result.get("hits", {}).get("hits", [])]
     except Exception:
         logger.exception("image_search: k-NN search failed")
@@ -281,7 +281,7 @@ async def _web_detect(b64_image: str, api_key: str) -> dict[str, Any]:
         {"entities": [str], "best_guess": str, "page_titles": [str]}
         실패 또는 API 키 미설정 시 빈 값 반환
     """
-    import httpx  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
 
     _empty: dict[str, Any] = {"entities": [], "best_guess": "", "page_titles": []}
     if not api_key or not b64_image:
@@ -296,10 +296,7 @@ async def _web_detect(b64_image: str, api_key: str) -> dict[str, Any]:
                 }
             ]
         }
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(endpoint, json=body)
-            resp.raise_for_status()
-            data = resp.json()
+        data = await request_json("POST", endpoint, json=body, timeout=15)
 
         responses = data.get("responses", [])
         web = responses[0].get("webDetection", {}) if responses else {}
@@ -449,7 +446,7 @@ async def _save_gp_place_to_db(
 
 async def _get_google_place_details(raw_place_id: str, api_key: str) -> dict[str, Any]:
     """Google Places Details API → 영업시간·전화·평점 등 상세 정보. 실패 시 빈 dict."""
-    import httpx  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
 
     if not api_key or not raw_place_id:
         return {}
@@ -460,13 +457,12 @@ async def _get_google_place_details(raw_place_id: str, api_key: str) -> dict[str
             "fields": "rating,user_ratings_total,opening_hours,formatted_phone_number,price_level,website",
             "key": api_key,
         }
-        async with httpx.AsyncClient(timeout=8) as client:
-            resp = await client.get(
-                "https://maps.googleapis.com/maps/api/place/details/json",
-                params=params,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        data = await request_json(
+            "GET",
+            "https://maps.googleapis.com/maps/api/place/details/json",
+            params=params,
+            timeout=8,
+        )
         return data.get("result", {})
     except Exception:
         logger.warning("image_search: google place details failed id=%s", raw_place_id)
@@ -479,7 +475,7 @@ async def _search_google_places(name: str, api_key: str) -> Optional[dict[str, A
     반환 dict: place_id(gp_ 접두어), name, category, address, lat, lng,
               rating, user_ratings_total, phone, opening_hours, price_level
     """
-    import httpx  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
 
     if not api_key:
         return None
@@ -489,13 +485,12 @@ async def _search_google_places(name: str, api_key: str) -> Optional[dict[str, A
             "language": "ko",
             "key": api_key,
         }
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                "https://maps.googleapis.com/maps/api/place/textsearch/json",
-                params=params,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        data = await request_json(
+            "GET",
+            "https://maps.googleapis.com/maps/api/place/textsearch/json",
+            params=params,
+            timeout=10,
+        )
 
         results = data.get("results", [])
         if not results:
@@ -565,6 +560,9 @@ async def _extract_place_hint(
     """
     from langchain_google_genai import ChatGoogleGenerativeAI  # pyright: ignore[reportMissingImports]
 
+    from src.utils.llm_parsing import parse_llm_json  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
+
     if not api_key or (not entities and not best_guess and not page_titles):
         return ""
 
@@ -582,28 +580,26 @@ async def _extract_place_hint(
             google_api_key=api_key,
             temperature=0,
         )
-        response = await llm.ainvoke(
-            [
-                (
-                    "system",
-                    "구글 역방향 이미지 검색 결과입니다. "
-                    "아래 텍스트에 명시적으로 등장하는 카페·식당·건물·공원 등 실제 장소의 고유명사(상호명/장소명)가 있으면 하나만 추출하세요. "
-                    "절대로 추론하거나 추측하지 마세요. 텍스트에 글자 그대로 나온 장소명만 허용합니다. "
-                    "Interior design, decoration, table, chair 같은 일반 사물/형용사, "
-                    "개인 이름(YouTuber, 블로거 등), 홈데코 관련 키워드는 장소명이 아닙니다. "
-                    "장소명이 없으면 반드시 빈 문자열을 반환하세요. "
-                    'JSON으로만 응답: {"place_name": "장소명"} 또는 {"place_name": ""}',
-                ),
-                ("human", "\n".join(parts)),
-            ]
+        response = await retry_call(
+            lambda: llm.ainvoke(
+                [
+                    (
+                        "system",
+                        "구글 역방향 이미지 검색 결과입니다. "
+                        "아래 텍스트에 명시적으로 등장하는 카페·식당·건물·공원 등 실제 장소의 고유명사(상호명/장소명)가 있으면 하나만 추출하세요. "
+                        "절대로 추론하거나 추측하지 마세요. 텍스트에 글자 그대로 나온 장소명만 허용합니다. "
+                        "Interior design, decoration, table, chair 같은 일반 사물/형용사, "
+                        "개인 이름(YouTuber, 블로거 등), 홈데코 관련 키워드는 장소명이 아닙니다. "
+                        "장소명이 없으면 반드시 빈 문자열을 반환하세요. "
+                        'JSON으로만 응답: {"place_name": "장소명"} 또는 {"place_name": ""}',
+                    ),
+                    ("human", "\n".join(parts)),
+                ]
+            ),
+            attempts=3,
         )
         text = str(response.content).strip()
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-        result = json.loads(text)
+        result = parse_llm_json(text)
         hint = result.get("place_name", "").strip()
 
         # 할루시네이션 방지: 원본 텍스트에 hint가 실제로 등장하는지 검증
