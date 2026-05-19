@@ -32,7 +32,7 @@ jobs:
       # ② 배포 스크립트를 gcloud compute ssh로 실행
       - name: Deploy via gcloud SSH
         run: |
-          gcloud compute ssh ${{ env.GCE_INSTANCE }} \
+          gcloud compute ssh ijeong@${{ env.GCE_INSTANCE }} \
             --zone=${{ env.GCE_ZONE }} \
             --project=${{ env.PROJECT_ID }} \
             --command="$(cat <<'DEPLOY_SCRIPT'
