@@ -232,14 +232,17 @@ _COURSE_RERANK_PROMPT = """\
 
 ## 판단 기준
 - 사용자가 구체적 장소명을 지정하지 않은 경우, 해당 카테고리에서 **일반 소비자가 기대하는 대표적·트렌디한 장소**를 우선하세요.
-- 학교 매점, 관공서, 프랜차이즈 건강식품 매장 등은 코스 추천 맥락에서 후순위로 밀어주세요.
+- **편의점(GS25, CU, 이마트24, 세븐일레븐, 미니스톱)**, 마트, 학교 매점, 관공서, 프랜차이즈 건강식품 매장(정관장 등)은 **반드시 제외**하세요.
 - 사용자가 특정 장소나 브랜드를 명시한 경우에는 그것을 우선하세요.
 
 JSON으로만 응답하세요:
 {"ranked_ids": ["가장 적합한 place_id", "두 번째", ...]}
 
-상위 10개만 포함하세요.
+상위 10개만 포함하세요. 편의점·마트는 ranked_ids에 포함하지 마세요.
 """
+
+# 코스 추천에서 제외할 장소명 패턴 (편의점·마트·매점)
+_COURSE_EXCLUDE_NAMES = ["GS25", "CU", "이마트24", "세븐일레븐", "미니스톱", "정관장", "매점"]
 
 
 async def _llm_rerank_candidates(
@@ -697,8 +700,22 @@ async def course_plan_node(state: dict[str, Any]) -> dict[str, Any]:
             ]
         }
 
-    # ②-b LLM Rerank (적합도 순위 재배치)
+    # ②-b 편의점·마트 사전 필터링 + LLM Rerank
+    candidates = [c for c in candidates if not any(ex in (c.get("name") or "") for ex in _COURSE_EXCLUDE_NAMES)]
+    if not candidates:
+        return {
+            "response_blocks": [
+                {
+                    "type": "text_stream",
+                    "system": _COURSE_SYSTEM_PROMPT,
+                    "prompt": f"사용자 질문: {query}\n\n코스를 구성할 장소를 찾지 못했습니다. 다른 지역이나 카테고리로 다시 시도해보세요.",
+                },
+                {"type": "course", "course_id": str(uuid.uuid4()), "stops": [], "total_duration_min": 0},
+            ]
+        }
     candidates = await _llm_rerank_candidates(candidates, query, categories)
+    # 안전망: LLM이 제외 대상을 포함시킨 경우 다시 제거
+    candidates = [c for c in candidates if not any(ex in (c.get("name") or "") for ex in _COURSE_EXCLUDE_NAMES)]
 
     # ③ Greedy NN 경로 최적화
     route = _greedy_nn_route(candidates)
