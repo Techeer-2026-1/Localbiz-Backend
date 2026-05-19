@@ -312,11 +312,13 @@ async def _get_access_token(user_id: int) -> str:
             },
             timeout=10.0,
         )
+        # 200이어도 예상 외 payload일 수 있어 키 추출까지 try 안에서 — KeyError를
+        # 사용자 친화적 _CalendarError로 변환 (CodeRabbit #124 리뷰 반영).
+        access_token: str = data["access_token"]
     except Exception:
         logger.warning("calendar_node: access_token 발급 실패")
         raise _CalendarError("Google Calendar 연동에 실패했습니다. 다시 시도해 주세요.")
 
-    access_token: str = data["access_token"]
     _token_cache[user_id] = access_token
     return access_token
 
