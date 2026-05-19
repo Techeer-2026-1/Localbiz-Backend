@@ -57,12 +57,12 @@ async def test_place_name_only_returns_text_stream() -> None:
 
 @pytest.mark.asyncio
 async def test_missing_place_name_returns_error() -> None:
-    """place_name 없으면 error 블록 반환."""
+    """place_name 없으면 text_stream으로 안내 반환."""
     state = {"processed_query": {"place_id": "uuid-001", "place_name": ""}}
     result = await booking_node(state)  # type: ignore[arg-type]
 
     blocks = result["response_blocks"]
-    assert blocks[0]["type"] == "error"
+    assert blocks[0]["type"] == "text_stream"
 
 
 @pytest.mark.asyncio
@@ -149,8 +149,100 @@ async def test_accommodation_missing_dates_returns_error() -> None:
         result = await booking_node(state)  # type: ignore[arg-type]
 
     blocks = result["response_blocks"]
-    assert blocks[0]["type"] == "error"
-    assert "체크인" in blocks[0]["message"]
+    assert blocks[0]["type"] == "text_stream"
+    assert "체크인" in blocks[0]["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_tourist_category_returns_tourist_links() -> None:
+    """관광지 카테고리 → KOPIS 아닌 네이버/카카오/구글 링크."""
+    pool_mock = _make_pool_mock(category="관광지")
+
+    with (
+        patch("src.graph.booking_node.get_pool", return_value=pool_mock),
+        patch("src.graph.booking_node.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.google_places_api_key = ""
+
+        state = {"processed_query": {"place_id": "uuid-006", "place_name": "신라스테이 마포"}}
+        result = await booking_node(state)  # type: ignore[arg-type]
+
+    blocks = result["response_blocks"]
+    assert blocks[0]["type"] == "text_stream"
+    assert "booking.naver.com" in blocks[0]["prompt"]
+    assert "kopis" not in blocks[0]["prompt"].lower()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_category_returns_text_stream() -> None:
+    """예약 불가 카테고리(의료) → text_stream 안내 메시지."""
+    pool_mock = _make_pool_mock(category="의료")
+
+    with (
+        patch("src.graph.booking_node.get_pool", return_value=pool_mock),
+        patch("src.graph.booking_node.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.google_places_api_key = ""
+
+        state = {"processed_query": {"place_id": "uuid-007", "place_name": "강남 내과"}}
+        result = await booking_node(state)  # type: ignore[arg-type]
+
+    blocks = result["response_blocks"]
+    assert blocks[0]["type"] == "text_stream"
+    assert "의료" in blocks[0]["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_accommodation_different_dates_different_cache() -> None:
+    """숙박 날짜 다르면 캐시 별도 저장 — 날짜 오염 없음."""
+    pool_mock = _make_pool_mock(category="숙박")
+
+    with (
+        patch("src.graph.booking_node.get_pool", return_value=pool_mock),
+        patch("src.graph.booking_node.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.google_places_api_key = ""
+
+        state_a = {
+            "processed_query": {
+                "place_id": "uuid-008",
+                "place_name": "롯데호텔",
+                "check_in": "2026-05-22",
+                "check_out": "2026-05-23",
+            }
+        }
+        state_b = {
+            "processed_query": {
+                "place_id": "uuid-008",
+                "place_name": "롯데호텔",
+                "check_in": "2026-06-10",
+                "check_out": "2026-06-12",
+            }
+        }
+        result_a = await booking_node(state_a)  # type: ignore[arg-type]
+        result_b = await booking_node(state_b)  # type: ignore[arg-type]
+
+    prompt_a = result_a["response_blocks"][0]["prompt"]
+    prompt_b = result_b["response_blocks"][0]["prompt"]
+    assert "2026-05-22" in prompt_a
+    assert "2026-06-10" in prompt_b
+    assert prompt_a != prompt_b
+
+
+@pytest.mark.asyncio
+async def test_accommodation_missing_checkin_returns_ask() -> None:
+    """check_in/check_out 둘 다 없으면 text_stream으로 날짜 요청."""
+    state = {
+        "processed_query": {
+            "place_name": "신라스테이 마포",
+            "category": "호텔",
+        }
+    }
+    result = await booking_node(state)  # type: ignore[arg-type]
+
+    blocks = result["response_blocks"]
+    assert blocks[0]["type"] == "text_stream"
+    assert "체크인" in blocks[0]["prompt"]
 
 
 @pytest.mark.asyncio

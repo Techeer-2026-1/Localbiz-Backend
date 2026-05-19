@@ -38,13 +38,16 @@ _places_cache: TTLCache = TTLCache(maxsize=500, ttl=3600)
 _GOOGLE_PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
 
 # ---------------------------------------------------------------------------
-# 카테고리 분류 집합 — DB의 category 컬럼 값과 매핑
-# lower()로 소문자 변환 후 비교하므로 모두 소문자로 정의
+# 카테고리 분류 집합 — DB 18종 한글값 기준 + Gemini 추론값 alias 포함
+# any(c in cat for c in _CATS) 패턴으로 substring 매칭
 # ---------------------------------------------------------------------------
 _RESTAURANT_CATS = {"음식점", "카페", "주점", "restaurant", "cafe", "pub", "bar"}
-_ACCOMMODATION_CATS = {"숙박", "호텔", "모텔", "게스트하우스", "accommodation", "hotel"}
-_PUBLIC_CATS = {"공공시설", "공공", "public"}
-_CULTURAL_CATS = {"문화", "관광", "공연", "전시", "cultural", "tourist"}
+_ACCOMMODATION_CATS = {"숙박", "호텔", "모텔", "게스트하우스", "민박", "여관", "accommodation", "hotel"}
+_PUBLIC_CATS = {"공공시설", "공원", "체육시설", "도서관", "복지시설", "public", "sports", "park", "library"}
+_CULTURAL_CATS = {"문화시설", "문화", "공연", "전시", "영화관", "박물관", "미술관", "cultural"}
+_TOURIST_CATS = {"관광지", "관광", "tourist"}
+# 예약 연동 미지원 카테고리 — 안내 메시지만 반환
+_UNAVAILABLE_CATS = {"의료", "쇼핑", "미용", "뷰티", "주차장", "지하철역", "노래방"}
 
 
 # ---------------------------------------------------------------------------
@@ -74,22 +77,26 @@ async def booking_node(state: AgentState) -> dict[str, Any]:
     # ── 입력 검증 ──────────────────────────────────────────────────────────
     if not pq:
         logger.warning("booking_node: processed_query 없음")
-        return {"response_blocks": [_error_block("예약할 장소를 알 수 없습니다. 장소 이름을 포함해 말씀해 주세요.")]}
+        return {"response_blocks": [_ask_block("예약할 장소를 알 수 없습니다. 장소 이름을 포함해 말씀해 주세요.")]}
 
     place_name: str = pq.get("place_name", "").strip()
     if not place_name:
         logger.warning("booking_node: place_name 없음")
-        return {"response_blocks": [_error_block("예약할 장소 이름을 알려주세요. 예) '스타벅스 강남 예약해줘'")]}
+        return {"response_blocks": [_ask_block("예약할 장소 이름을 알려주세요. 예) '스타벅스 강남 예약해줘'")]}
 
     place_id: Optional[str] = pq.get("place_id")
     category: str = "unknown"
     phone: Optional[str] = None
 
     # ── place_id 있으면 캐시/DB 조회 ──────────────────────────────────────
+    check_in_val: str = pq.get("check_in") or ""
+    check_out_val: str = pq.get("check_out") or ""
+    cache_key = f"{place_id}:{check_in_val}:{check_out_val}" if place_id else ""
+
     if place_id:
-        if place_id in _places_cache:
+        if cache_key in _places_cache:
             logger.info("booking_node: cache hit place_id=%s", place_id)
-            return {"response_blocks": [_text_stream_block(_places_cache[place_id])]}
+            return {"response_blocks": [_text_stream_block(_places_cache[cache_key])]}
 
         # places 테이블에서 카테고리와 전화번호 조회 (불변식 #8: asyncpg $1 바인딩)
         pool = get_pool()
@@ -100,22 +107,34 @@ async def booking_node(state: AgentState) -> dict[str, Any]:
             )
         category = (row["category"] if row else "") or "unknown"
         phone = row["phone"] if row else None
-        logger.info("booking_node: place_id=%s category=%s", place_id, category)
+        logger.info(
+            "booking_node: place_id=%s category=%s check_in=%s check_out=%s",
+            place_id,
+            category,
+            check_in_val,
+            check_out_val,
+        )
     else:
         # place_id 없으면 processed_query의 category 사용
         category = pq.get("category", "") or "unknown"
-        logger.info("booking_node: place_name=%s category=%s (no place_id)", place_name, category)
+        logger.info(
+            "booking_node: place_name=%s category=%s check_in=%s check_out=%s (no place_id)",
+            place_name,
+            category,
+            check_in_val,
+            check_out_val,
+        )
 
     # ── 카테고리별 딥링크 생성 ────────────────────────────────────────────
     try:
         links_text = await _build_links(category, place_name, phone, pq)
     except _BookingError as e:
-        # 숙박 날짜 누락 등 — 캐시에 저장하지 않고 error 블록 반환
-        return {"response_blocks": [_error_block(str(e))]}
+        # 날짜 누락 등 — text_stream으로 안내 (error 블록은 FE에서 빈 메시지로 처리됨)
+        return {"response_blocks": [_ask_block(str(e))]}
 
     # ── 캐시 저장 후 반환 (place_id 있을 때만) ───────────────────────────
     if place_id:
-        _places_cache[place_id] = links_text
+        _places_cache[cache_key] = links_text
     return {"response_blocks": [_text_stream_block(links_text)]}
 
 
@@ -135,8 +154,13 @@ async def _build_links(
     """
     cat = category.lower()
 
-    # 카테고리 집합 중 하나라도 포함되면 해당 분기
-    if any(c in cat for c in _RESTAURANT_CATS):
+    # check_in/check_out 둘 다 있으면 관광지·unknown이라도 숙박으로 처리
+    # (DB에 관광지로 잘못 저장된 호텔 대응)
+    has_dates = bool(pq.get("check_in") and pq.get("check_out"))
+
+    if any(c in cat for c in _UNAVAILABLE_CATS):
+        return _build_unavailable_message(category)
+    elif any(c in cat for c in _RESTAURANT_CATS):
         return await _build_restaurant_links(place_name, phone)
     elif any(c in cat for c in _ACCOMMODATION_CATS):
         return _build_accommodation_links(place_name, pq)  # 날짜 없으면 raise
@@ -144,7 +168,13 @@ async def _build_links(
         return _build_public_links(place_name)
     elif any(c in cat for c in _CULTURAL_CATS):
         return _build_cultural_links(place_name)
+    elif any(c in cat for c in _TOURIST_CATS):
+        if has_dates:
+            return _build_accommodation_links(place_name, pq)
+        return _build_tourist_links(place_name)
     else:
+        if has_dates:
+            return _build_accommodation_links(place_name, pq)
         return _build_fallback_links(place_name)
 
 
@@ -250,10 +280,30 @@ def _build_cultural_links(place_name: str) -> str:
     encoded = quote(place_name, safe="")
     lines = [
         "🎭 **문화/공연 예약하기**\n",
-        f"🎫 [KOPIS](http://www.kopis.or.kr/search?query={encoded})",
+        f"🎫 [KOPIS](https://www.kopis.or.kr/search?query={encoded})",
         f"🎟️ [인터파크](https://ticket.interpark.com/search?query={encoded})",
     ]
     return "\n".join(lines)
+
+
+def _build_tourist_links(place_name: str) -> str:
+    """관광지 — 네이버/카카오/구글 검색 fallback."""
+    encoded = quote(place_name, safe="")
+    lines = [
+        "🗺️ **관광지 예약/입장 안내**\n",
+        f"🔵 [네이버 예약](https://booking.naver.com/search?query={encoded})",
+        f"🟡 [카카오맵](https://place.map.kakao.com/search?q={encoded})",
+        f"🌐 [구글 검색](https://www.google.com/search?q={encoded}+예약)",
+    ]
+    return "\n".join(lines)
+
+
+def _build_unavailable_message(category: str) -> str:
+    """예약 연동 미지원 카테고리 안내."""
+    return (
+        f"'{category}' 카테고리는 온라인 예약 연동을 지원하지 않아요. "
+        "해당 장소에 직접 문의하시거나 네이버/카카오맵에서 검색해 보세요."
+    )
 
 
 def _build_fallback_links(place_name: str) -> str:
@@ -287,6 +337,15 @@ def _text_stream_block(links_text: str) -> dict[str, Any]:
             "URL 주소는 절대 변경하거나 생략하지 마세요."
         ),
         "prompt": links_text,
+    }
+
+
+def _ask_block(message: str) -> dict[str, Any]:
+    """추가 정보 요청 text_stream 블록 — FE가 error 이벤트를 빈 메시지로 처리하므로 text_stream 사용."""
+    return {
+        "type": "text_stream",
+        "system": "사용자에게 필요한 정보를 친절하게 요청하세요. URL은 포함하지 마세요.",
+        "prompt": message,
     }
 
 
