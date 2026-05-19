@@ -29,42 +29,43 @@ jobs:
       - name: Setup gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
 
-      # ② 배포 스크립트를 gcloud compute ssh로 실행
-      - name: Deploy via gcloud SSH
+      # ② 배포 파일 준비 (runner에서 시크릿 치환)
+      - name: Prepare deploy files
         run: |
-          gcloud compute ssh ijeong@${{ env.GCE_INSTANCE }} \
-            --zone=${{ env.GCE_ZONE }} \
-            --project=${{ env.PROJECT_ID }} \
-            --command="$(cat <<'DEPLOY_SCRIPT'
-          set -euo pipefail
-          cd ~/LocalBiz-Seoul
-          git fetch origin dev
-          git checkout dev
-          git pull origin dev
+          # 시크릿 파일 — 따옴표 없는 heredoc이므로 runner에서 변수 치환됨
+          cat > /tmp/secrets.env <<EOF
+          GOOGLE_CALENDAR_CLIENT_ID=${GOOGLE_CALENDAR_CLIENT_ID}
+          GOOGLE_CALENDAR_CLIENT_SECRET=${GOOGLE_CALENDAR_CLIENT_SECRET}
+          GOOGLE_CALENDAR_REDIRECT_URI=${GOOGLE_CALENDAR_REDIRECT_URI}
+          GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
+          EOF
 
+          # 배포 스크립트 — 따옴표 있는 heredoc이므로 치환 없이 그대로 전송
+          cat > /tmp/deploy.sh <<'SCRIPT'
+          #!/bin/bash
+          set -eo pipefail
+          cd ~/LocalBiz-Seoul
+          git fetch origin dev && git checkout dev && git pull origin dev
           cd backend
 
-          # .env 시크릿 갱신 (awk 방식 — sed 특수문자 문제 해결)
-          ENV_FILE=".env"
-          for pair in \
-            "GOOGLE_CALENDAR_CLIENT_ID=$GOOGLE_CALENDAR_CLIENT_ID" \
-            "GOOGLE_CALENDAR_CLIENT_SECRET=$GOOGLE_CALENDAR_CLIENT_SECRET" \
-            "GOOGLE_CALENDAR_REDIRECT_URI=$GOOGLE_CALENDAR_REDIRECT_URI" \
-            "GCS_BUCKET_NAME=$GCS_BUCKET_NAME"; do
-            key="${pair%%=*}"
-            value="${pair#*=}"
-            if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
-              awk -v k="$key" -v v="$value" 'BEGIN{FS=OFS="="} $1==k{$2=v}{print}' "$ENV_FILE" > "${ENV_FILE}.tmp"
-              mv "${ENV_FILE}.tmp" "$ENV_FILE"
-            else
-              echo "${key}=${value}" >> "$ENV_FILE"
-            fi
-          done
+          # 시크릿 .env에 병합
+          if [ -f /tmp/secrets.env ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              key="${line%%=*}"
+              value="${line#*=}"
+              if grep -q "^${key}=" .env 2>/dev/null; then
+                grep -v "^${key}=" .env > .env.tmp
+                echo "${key}=${value}" >> .env.tmp
+                mv .env.tmp .env
+              else
+                echo "${key}=${value}" >> .env
+              fi
+            done < /tmp/secrets.env
+            rm -f /tmp/secrets.env
+          fi
 
-          # 롤백용 현재 이미지 ID 저장
-          PREV_IMAGE=$(docker inspect --format='{{.Image}}' backend-api-1 2>/dev/null || echo "")
-
-          # Docker 빌드 + 시작
+          # Docker 빌드 + 배포
           docker compose build api
           docker compose up -d --no-deps api
 
@@ -77,20 +78,24 @@ jobs:
             sleep 2
           done
 
-          # 헬스체크 실패 → 롤백
-          echo "Health check failed — rolling back"
+          echo "Health check failed after 60s"
           docker compose logs --tail=50 api
-          if [ -n "$PREV_IMAGE" ]; then
-            docker tag "$PREV_IMAGE" backend-api:rollback
-            docker compose down api 2>/dev/null || true
-            docker compose up -d --no-deps api
-            echo "Rolled back to previous image"
-          fi
           exit 1
-          DEPLOY_SCRIPT
-          )"
+          SCRIPT
+          chmod +x /tmp/deploy.sh
         env:
           GOOGLE_CALENDAR_CLIENT_ID: ${{ secrets.GOOGLE_CALENDAR_CLIENT_ID }}
           GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.GOOGLE_CALENDAR_CLIENT_SECRET }}
           GOOGLE_CALENDAR_REDIRECT_URI: ${{ secrets.GOOGLE_CALENDAR_REDIRECT_URI }}
           GCS_BUCKET_NAME: ${{ secrets.GCS_BUCKET_NAME }}
+
+      # ③ 서버에 전송 + 실행
+      - name: Upload and execute deploy
+        run: |
+          gcloud compute scp /tmp/secrets.env /tmp/deploy.sh \
+            ijeong@${{ env.GCE_INSTANCE }}:/tmp/ \
+            --zone=${{ env.GCE_ZONE }} --project=${{ env.PROJECT_ID }} --quiet
+
+          gcloud compute ssh ijeong@${{ env.GCE_INSTANCE }} \
+            --zone=${{ env.GCE_ZONE }} --project=${{ env.PROJECT_ID }} --quiet \
+            --command="bash /tmp/deploy.sh && rm -f /tmp/deploy.sh"
