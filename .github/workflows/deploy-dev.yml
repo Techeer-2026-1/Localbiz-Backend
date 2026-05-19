@@ -4,63 +4,93 @@ on:
   push:
     branches: [dev]
 
+permissions:
+  contents: read
+  id-token: write  # WIF OIDC 토큰 발급에 필요
+
+env:
+  GCE_INSTANCE: localbiz-api
+  GCE_ZONE: asia-northeast3-a
+  PROJECT_ID: project-e9a9c8f2-70da-411d-a51
+  WIF_PROVIDER: projects/124882044304/locations/global/workloadIdentityPools/github-actions/providers/github-repo
+  SA_EMAIL: github-deploy@project-e9a9c8f2-70da-411d-a51.iam.gserviceaccount.com
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
+      # ① GCP 인증 (WIF — SSH key 불필요)
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
-          host: ${{ secrets.GCE_HOST }}
-          username: ${{ secrets.GCE_USER }}
-          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
-          timeout: 60s
-          command_timeout: 5m
-          script: |
-            set -euo pipefail
-            cd ~/LocalBiz-Seoul
-            git fetch origin dev
-            git checkout dev
-            git pull origin dev
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.SA_EMAIL }}
 
-            # .env 시크릿 갱신
-            _upsert_env() { local k="$1" v="$2" f="backend/.env"; local escaped; escaped=$(printf '%s\n' "$v" | sed 's/[&/\]/\\&/g'); grep -q "^${k}=" "$f" 2>/dev/null && sed -i "s|^${k}=.*|${k}=${escaped}|" "$f" || echo "${k}=${v}" >> "$f"; }
-            _upsert_env "GOOGLE_CALENDAR_CLIENT_ID" "${{ secrets.GOOGLE_CALENDAR_CLIENT_ID }}"
-            _upsert_env "GOOGLE_CALENDAR_CLIENT_SECRET" "${{ secrets.GOOGLE_CALENDAR_CLIENT_SECRET }}"
-            _upsert_env "GOOGLE_CALENDAR_REDIRECT_URI" "${{ secrets.GOOGLE_CALENDAR_REDIRECT_URI }}"
-            _upsert_env "GCS_BUCKET_NAME" "${{ secrets.GCS_BUCKET_NAME }}"
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
 
-            # Docker 공식 apt repo 등록 + Compose V2 설치 (1회성)
-            if ! docker compose version > /dev/null 2>&1; then
-              . /etc/os-release
-              DISTRO="$ID"
-              sudo install -m 0755 -d /etc/apt/keyrings
-              sudo curl -fsSL "https://download.docker.com/linux/${DISTRO}/gpg" -o /etc/apt/keyrings/docker.asc
-              sudo chmod a+r /etc/apt/keyrings/docker.asc
-              echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${DISTRO} ${VERSION_CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-              sudo apt-get update -qq
-              sudo apt-get install -y -qq docker-compose-plugin
-              docker compose version
+      # ② 배포 스크립트를 gcloud compute ssh로 실행
+      - name: Deploy via gcloud SSH
+        run: |
+          gcloud compute ssh ${{ env.GCE_INSTANCE }} \
+            --zone=${{ env.GCE_ZONE }} \
+            --project=${{ env.PROJECT_ID }} \
+            --command="$(cat <<'DEPLOY_SCRIPT'
+          set -euo pipefail
+          cd ~/LocalBiz-Seoul
+          git fetch origin dev
+          git checkout dev
+          git pull origin dev
+
+          cd backend
+
+          # .env 시크릿 갱신 (awk 방식 — sed 특수문자 문제 해결)
+          ENV_FILE=".env"
+          for pair in \
+            "GOOGLE_CALENDAR_CLIENT_ID=$GOOGLE_CALENDAR_CLIENT_ID" \
+            "GOOGLE_CALENDAR_CLIENT_SECRET=$GOOGLE_CALENDAR_CLIENT_SECRET" \
+            "GOOGLE_CALENDAR_REDIRECT_URI=$GOOGLE_CALENDAR_REDIRECT_URI" \
+            "GCS_BUCKET_NAME=$GCS_BUCKET_NAME"; do
+            key="${pair%%=*}"
+            value="${pair#*=}"
+            if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+              awk -v k="$key" -v v="$value" 'BEGIN{FS=OFS="="} $1==k{$2=v}{print}' "$ENV_FILE" > "${ENV_FILE}.tmp"
+              mv "${ENV_FILE}.tmp" "$ENV_FILE"
+            else
+              echo "${key}=${value}" >> "$ENV_FILE"
             fi
+          done
 
-            # 기존 서비스 정리 — systemd(bare VM) 또는 이전 Docker 컨테이너
-            sudo systemctl stop localbiz-api 2>/dev/null || true
-            sudo systemctl disable localbiz-api 2>/dev/null || true
-            cd backend
-            docker compose down 2>/dev/null || true
+          # 롤백용 현재 이미지 ID 저장
+          PREV_IMAGE=$(docker inspect --format='{{.Image}}' backend-api-1 2>/dev/null || echo "")
 
-            # Docker 빌드 + 시작 (DB 컨테이너 제외 — 프로덕션은 Cloud SQL + 별도 GCE OpenSearch)
-            docker compose build api
+          # Docker 빌드 + 시작
+          docker compose build api
+          docker compose up -d --no-deps api
+
+          # 헬스체크 (최대 60초)
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Health check passed"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          # 헬스체크 실패 → 롤백
+          echo "Health check failed — rolling back"
+          docker compose logs --tail=50 api
+          if [ -n "$PREV_IMAGE" ]; then
+            docker tag "$PREV_IMAGE" backend-api:rollback
+            docker compose down api 2>/dev/null || true
             docker compose up -d --no-deps api
-
-            # 헬스체크 대기 (최대 60초)
-            for i in $(seq 1 30); do
-              if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-                echo "Health check passed"
-                exit 0
-              fi
-              sleep 2
-            done
-            echo "Health check failed after 60s"
-            docker compose logs --tail=50 api
-            exit 1
+            echo "Rolled back to previous image"
+          fi
+          exit 1
+          DEPLOY_SCRIPT
+          )"
+        env:
+          GOOGLE_CALENDAR_CLIENT_ID: ${{ secrets.GOOGLE_CALENDAR_CLIENT_ID }}
+          GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.GOOGLE_CALENDAR_CLIENT_SECRET }}
+          GOOGLE_CALENDAR_REDIRECT_URI: ${{ secrets.GOOGLE_CALENDAR_REDIRECT_URI }}
+          GCS_BUCKET_NAME: ${{ secrets.GCS_BUCKET_NAME }}
