@@ -695,6 +695,8 @@ async def _handle_refinement(
     if not prev_stops:
         return await course_plan_node(state)
 
+    no_candidate_found = False
+
     if action == "remove" and target_index is not None:
         stops = apply_remove(prev_stops, target_index)
         for i, stop in enumerate(stops, 1):
@@ -781,7 +783,8 @@ async def _handle_refinement(
                 seen.add(pid)
                 new_candidates.append(c)
 
-        if not new_candidates:
+        no_candidate_found = not new_candidates
+        if no_candidate_found:
             stops = prev_stops
         else:
             # raw place dict → course stop 형태로 래핑
@@ -834,9 +837,13 @@ async def _handle_refinement(
                 stop_names.append(name)
 
     result_summary = ", ".join(stop_names)
-    prompt = (
-        f"사용자 요청: {query}\n\n수정된 코스: {result_summary}\n\n코스 전체의 테마와 매력을 2-3문장으로 요약해주세요."
-    )
+    if action in ("replace", "add") and no_candidate_found:
+        prompt = (
+            f"사용자 요청: {query}\n\n조건에 맞는 대체 장소를 찾지 못해 기존 코스를 유지합니다. "
+            f"현재 코스: {result_summary}\n\n다른 조건으로 다시 요청해보라고 1-2문장으로 안내해주세요."
+        )
+    else:
+        prompt = f"사용자 요청: {query}\n\n수정된 코스: {result_summary}\n\n코스 전체의 테마와 매력을 2-3문장으로 요약해주세요."
     blocks: list[dict[str, Any]] = [
         {"type": "text_stream", "system": _COURSE_SYSTEM_PROMPT, "prompt": prompt},
         course_block,
