@@ -665,6 +665,8 @@ async def _handle_refinement(
     refinement: dict[str, Any],
 ) -> dict[str, Any]:
     """COURSE_PLAN refinement 처리 — 이전 코스 기반 수정."""
+    from src.graph.refine_helpers import REFINE_SYSTEM_PROMPT as _refine_system  # pyright: ignore[reportMissingImports]
+
     if state.get("_refine_depth", 0) > 1:
         clean = dict(state)
         clean["previous_blocks"] = None
@@ -903,7 +905,7 @@ async def _handle_refinement(
     else:
         prompt = f"사용자 요청: {query}\n\n수정된 코스: {result_summary}\n\n코스 전체의 테마와 매력을 2-3문장으로 요약해주세요."
     blocks: list[dict[str, Any]] = [
-        {"type": "text_stream", "system": _COURSE_SYSTEM_PROMPT, "prompt": prompt},
+        {"type": "text_stream", "system": _refine_system, "prompt": prompt},
         course_block,
     ]
     return {"response_blocks": blocks}
