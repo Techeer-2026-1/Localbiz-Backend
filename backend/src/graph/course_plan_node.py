@@ -696,6 +696,7 @@ async def _handle_refinement(
         return await course_plan_node(state)
 
     no_candidate_found = False
+    target_place_name = ""
 
     if action == "remove" and target_index is not None:
         stops = apply_remove(prev_stops, target_index)
@@ -773,15 +774,44 @@ async def _handle_refinement(
             except Exception:
                 logger.warning("course refine: OS 검색 실패")
 
-        # 기존 코스에 없는 후보만 필터
+        # 교체 대상 장소 이름 (이름 유사도 필터용)
+        target_place_name = ""
+        if action == "replace" and target_index is not None:
+            tidx = target_index - 1
+            if 0 <= tidx < len(prev_stops):
+                tp = prev_stops[tidx]
+                if isinstance(tp, dict):
+                    tpl = tp.get("place", {})
+                    target_place_name = tpl.get("name", "") if isinstance(tpl, dict) else ""
+
+        # 기존 코스에 없는 후보만 필터 + 이름 유사도 체크
         all_candidates = os_places + pg_places
         seen: set[str] = set()
+        # 기존 장소 이름 수집 (부분 매칭 필터)
+        existing_names = set()
+        for s in prev_stops:
+            if isinstance(s, dict):
+                p = s.get("place", {})
+                n = p.get("name", "") if isinstance(p, dict) else ""
+                if n:
+                    existing_names.add(n)
+
         new_candidates: list[dict[str, Any]] = []
         for c in all_candidates:
             pid = c.get("place_id", "")
-            if pid and pid not in existing_ids and pid not in seen:
-                seen.add(pid)
-                new_candidates.append(c)
+            cname = c.get("name", "")
+            if not pid or pid in existing_ids or pid in seen:
+                continue
+            # 이름 유사도 체크 — 기존 장소와 이름이 포함 관계면 같은 장소로 판단
+            is_similar = False
+            for ename in existing_names:
+                if ename and cname and (ename in cname or cname in ename):
+                    is_similar = True
+                    break
+            if is_similar:
+                continue
+            seen.add(pid)
+            new_candidates.append(c)
 
         no_candidate_found = not new_candidates
         if no_candidate_found:
@@ -841,6 +871,34 @@ async def _handle_refinement(
         prompt = (
             f"사용자 요청: {query}\n\n조건에 맞는 대체 장소를 찾지 못해 기존 코스를 유지합니다. "
             f"현재 코스: {result_summary}\n\n다른 조건으로 다시 요청해보라고 1-2문장으로 안내해주세요."
+        )
+    elif action == "replace" and target_place_name:
+        # 수정 안내 — "A를 B로 변경했습니다" 형식
+        new_place_name = ""
+        if not no_candidate_found and target_index is not None:
+            tidx2 = target_index - 1
+            if 0 <= tidx2 < len(stops):
+                sp = stops[tidx2]
+                if isinstance(sp, dict):
+                    spl = sp.get("place", {})
+                    new_place_name = spl.get("name", "") if isinstance(spl, dict) else ""
+        prompt = (
+            f"사용자 요청: {query}\n\n"
+            f"코스의 {target_index}번 장소를 **{target_place_name}**에서 **{new_place_name}**(으)로 변경했습니다.\n"
+            f"수정된 코스: {result_summary}\n\n"
+            f"변경된 장소를 포함해서 코스 전체를 2-3문장으로 간결하게 소개해주세요."
+        )
+    elif action == "remove":
+        prompt = (
+            f"사용자 요청: {query}\n\n"
+            f"코스에서 요청하신 장소를 제거했습니다.\n수정된 코스: {result_summary}\n\n"
+            f"변경된 코스를 2-3문장으로 간결하게 소개해주세요."
+        )
+    elif action == "add":
+        prompt = (
+            f"사용자 요청: {query}\n\n"
+            f"코스에 새로운 장소를 추가했습니다.\n수정된 코스: {result_summary}\n\n"
+            f"추가된 장소를 포함해서 코스 전체를 2-3문장으로 간결하게 소개해주세요."
         )
     else:
         prompt = f"사용자 요청: {query}\n\n수정된 코스: {result_summary}\n\n코스 전체의 테마와 매력을 2-3문장으로 요약해주세요."
