@@ -690,6 +690,15 @@ async def _handle_refinement(
     result_summary = "\n".join(f"- {r.get('title', '')}" for r in items)
     if no_candidate_found:
         prompt = f"사용자 요청: {query}\n\n조건에 맞는 대체 행사를 찾지 못해 기존 결과를 유지합니다. 다른 조건으로 다시 요청해보라고 1-2문장으로 안내해주세요."
+    elif action == "replace" and target_index is not None:
+        old_title = prev_items[target_index - 1].get("title", "") if 0 < target_index <= len(prev_items) else ""
+        new_title = items[target_index - 1].get("title", "") if 0 < target_index <= len(items) else ""
+        prompt = f"사용자 요청: {query}\n\n{target_index}번 행사를 **{old_title}**에서 **{new_title}**(으)로 변경했습니다.\n수정된 목록:\n{result_summary}\n\n변경 사항을 포함해 1-2문장으로 요약해주세요."
+    elif action == "remove":
+        prompt = f"사용자 요청: {query}\n\n요청하신 행사를 목록에서 제거했습니다.\n수정된 목록:\n{result_summary}\n\n1-2문장으로 요약해주세요."
+    elif action == "add":
+        added = items[-1].get("title", "") if items else ""
+        prompt = f"사용자 요청: {query}\n\n**{added}**을(를) 목록에 추가했습니다.\n수정된 목록:\n{result_summary}\n\n1-2문장으로 요약해주세요."
     else:
         prompt = f"사용자 요청: {query}\n\n수정된 행사 결과:\n{result_summary}\n\n위 결과를 종합 요약해주세요."
     blocks.append({"type": "text_stream", "system": _EVENT_SEARCH_SYSTEM_PROMPT, "prompt": prompt})
