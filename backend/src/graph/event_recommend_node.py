@@ -685,7 +685,8 @@ async def _handle_refinement(
         existing_ids = {it.get("event_id", "") for it in prev_items if isinstance(it, dict)}
         new_candidates = [it for it in new_items if it.get("event_id", "") not in existing_ids]
 
-        if not new_candidates:
+        no_candidate_found = not new_candidates
+        if no_candidate_found:
             items = prev_items
         elif action == "replace" and target_index is not None:
             items = apply_replace(prev_items, target_index, new_candidates[0])
@@ -693,12 +694,16 @@ async def _handle_refinement(
             items = apply_add(prev_items, new_candidates[0])
     else:
         items = prev_items
+        no_candidate_found = False
 
     blocks: list[dict[str, Any]] = []
     if items:
         blocks.append({"type": "events", "items": items, "total_count": len(items)})
     result_summary = "\n".join(f"- {r.get('title', '')}" for r in items)
-    prompt = f"사용자 요청: {query}\n\n수정된 행사 추천 결과:\n{result_summary}\n\n위 결과를 종합 요약해주세요."
+    if no_candidate_found:
+        prompt = f"사용자 요청: {query}\n\n조건에 맞는 대체 행사를 찾지 못해 기존 결과를 유지합니다. 다른 조건으로 다시 요청해보라고 1-2문장으로 안내해주세요."
+    else:
+        prompt = f"사용자 요청: {query}\n\n수정된 행사 추천 결과:\n{result_summary}\n\n위 결과를 종합 요약해주세요."
     blocks.append({"type": "text_stream", "system": _EVENT_RECOMMEND_SYSTEM_PROMPT, "prompt": prompt})
     return {"response_blocks": blocks}
 
