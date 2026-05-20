@@ -1,12 +1,22 @@
 """REFINE 공통 헬퍼 — 노드별 _handle_refinement에서 공유.
 
-리스트 항목 조작 (replace/remove/add) + 검색 쿼리 생성 유틸.
+리스트 항목 조작 (replace/remove/add) + 검색 쿼리 생성 유틸 + 전용 system prompt.
 """
 
 from __future__ import annotations
 
 import copy
 from typing import Any, Optional
+
+REFINE_SYSTEM_PROMPT = (
+    "당신은 서울 로컬 라이프 AI 챗봇 'AnyWay'입니다. "
+    "사용자가 이전 응답의 수정을 요청했고, 수정이 완료되었습니다.\n\n"
+    "## 절대 규칙\n"
+    "- 수정된 내용을 1-2문장으로 간결하게 안내하세요.\n"
+    "- 전체 테마나 매력을 개괄하지 마세요.\n"
+    "- 변경된 항목이 무엇인지 명확히 언급하세요.\n"
+    "- 핵심 키워드는 **굵게** 강조하세요."
+)
 
 
 def apply_remove(items: list[dict[str, Any]], target_index: int) -> list[dict[str, Any]]:
