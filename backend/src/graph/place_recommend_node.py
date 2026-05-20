@@ -20,7 +20,6 @@ ST_DWithin 공간 필터는 AgentState에 user_location 추가 후 도입 예정
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any, Optional
 
@@ -47,7 +46,7 @@ _PG_LIMIT = 10
 # ---------------------------------------------------------------------------
 async def _embed_query_768d(query: str, api_key: str) -> list[float]:
     """Gemini embedding-001 768d 단건 임베딩. 불변식 #7."""
-    import httpx
+    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
 
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
     body = {
@@ -60,10 +59,7 @@ async def _embed_query_768d(query: str, api_key: str) -> list[float]:
         "x-goog-api-key": api_key,
     }
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(url, json=body, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
+    data = await request_json("POST", url, json=body, headers=headers, timeout=10)
 
     return data.get("embedding", {}).get("values", [0.0] * 768)
 
@@ -124,6 +120,8 @@ async def _search_os_places(
     district: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """places_vector k-NN HNSW. district 있으면 필터 적용."""
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
+
     try:
         query_vector = await _embed_query_768d(query, api_key)
 
@@ -137,7 +135,7 @@ async def _search_os_places(
             "min_score": _OS_MIN_SCORE,
         }
 
-        result = await os_client.search(index="places_vector", body=body)
+        result = await retry_call(lambda: os_client.search(index="places_vector", body=body), attempts=3)
         hits = result.get("hits", {}).get("hits", [])
 
         places: list[dict[str, Any]] = []
@@ -178,6 +176,8 @@ async def _search_os_reviews(
     Returns:
         [{"place_id", "place_name", "keywords", "summary_text", "score"}]
     """
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
+
     try:
         query_vector = await _embed_query_768d(condition_text, api_key)
 
@@ -195,7 +195,7 @@ async def _search_os_reviews(
             "_source": ["place_id", "place_name", "keywords", "summary_text"],
         }
 
-        result = await os_client.search(index="place_reviews", body=body)
+        result = await retry_call(lambda: os_client.search(index="place_reviews", body=body), attempts=3)
         hits = result.get("hits", {}).get("hits", [])
 
         reviews: list[dict[str, Any]] = []
@@ -324,6 +324,8 @@ async def _llm_rerank(
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     from src.config import get_settings
+    from src.utils.llm_parsing import parse_llm_json  # pyright: ignore[reportMissingImports]
+    from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
 
     settings = get_settings()
     if not settings.gemini_llm_api_key or not candidates:
@@ -351,22 +353,19 @@ async def _llm_rerank(
             temperature=0,
         )
 
-        response = await llm.ainvoke(
-            [
-                ("system", _RERANK_SYSTEM_PROMPT),
-                ("human", user_prompt),
-            ]
+        response = await retry_call(
+            lambda: llm.ainvoke(
+                [
+                    ("system", _RERANK_SYSTEM_PROMPT),
+                    ("human", user_prompt),
+                ]
+            ),
+            attempts=3,
         )
         text = str(response.content).strip()
 
-        # Gemini ```json ... ``` 래핑 처리
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-
-        result = json.loads(text)
+        # parse_llm_json: 코드펜스 제거 + json.loads
+        result = parse_llm_json(text)
         ranked_ids: list[str] = result.get("ranked_ids", [])
         reasons: dict[str, str] = result.get("reasons", {})
 
