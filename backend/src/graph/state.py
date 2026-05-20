@@ -34,3 +34,6 @@ class AgentState(TypedDict, total=False):
     user_id: Optional[int]
     error: Optional[str]
     conversation_history: list[dict[str, str]]
+    previous_blocks: Optional[list[dict[str, Any]]]
+    refinement: Optional[dict[str, Any]]
+    original_intent: Optional[str]

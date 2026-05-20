@@ -57,6 +57,10 @@ def _validate_block_order(
     if intent is None:
         return "intent가 None — 블록 순서 검증 스킵"
 
+    # REFINE은 원본 intent의 블록 순서를 따르므로 검증 스킵
+    if intent == "REFINE":
+        return None
+
     expected = _EXPECTED_BLOCK_ORDER.get(intent)
     if expected is None:
         return None

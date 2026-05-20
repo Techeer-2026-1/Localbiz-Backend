@@ -130,10 +130,10 @@ async def _ensure_conversation(pool: Any, thread_id: str, user_id: int) -> None:
 
 
 async def _load_recent_history(pool: Any, thread_id: str) -> list[dict[str, str]]:
-    """intent 분류용 최근 대화 이력 조회 (최근 6턴)."""
+    """최근 대화 이력 조회 (최근 10메시지 = 5턴). 구조화 블록 요약 포함."""
     try:
         rows = await pool.fetch(
-            "SELECT role, blocks FROM messages WHERE thread_id = $1 ORDER BY message_id DESC LIMIT 6",
+            "SELECT role, blocks FROM messages WHERE thread_id = $1 ORDER BY message_id DESC LIMIT 10",
             thread_id,
         )
     except Exception:
@@ -158,6 +158,34 @@ async def _load_recent_history(pool: Any, thread_id: str) -> list[dict[str, str]
                 parts.append(block.get("content", ""))
             elif btype == "text_stream" and role == "assistant":
                 parts.append(block.get("content", ""))
+            elif btype == "places" and role == "assistant":
+                items = block.get("items", [])
+                names = [it.get("name", "") for it in items if isinstance(it, dict) and it.get("name")]
+                if names:
+                    parts.append(f"[장소 {len(names)}건: {', '.join(names[:5])}]")
+            elif btype == "events" and role == "assistant":
+                items = block.get("items", [])
+                titles = [it.get("title", "") for it in items if isinstance(it, dict) and it.get("title")]
+                if titles:
+                    parts.append(f"[행사 {len(titles)}건: {', '.join(titles[:5])}]")
+            elif btype == "course" and role == "assistant":
+                title = block.get("title", "")
+                stops = block.get("stops", [])
+                stop_names = []
+                for stop in stops:
+                    if isinstance(stop, dict):
+                        place = stop.get("place", {})
+                        name = place.get("name", "") if isinstance(place, dict) else ""
+                        if name:
+                            stop_names.append(name)
+                label = title or "코스"
+                if stop_names:
+                    parts.append(f"[{label} ({len(stop_names)}곳): {', '.join(stop_names)}]")
+            elif btype == "chart" and role == "assistant":
+                chart_places = block.get("places", [])
+                cnames = [cp.get("name", "") for cp in chart_places if isinstance(cp, dict) and cp.get("name")]
+                if cnames:
+                    parts.append(f"[비교: {' vs '.join(cnames[:3])}]")
         content = " ".join(p for p in parts if p).strip()
         if content:
             history.append({"role": role, "content": content})
@@ -188,8 +216,12 @@ async def _insert_message(
 # ---------------------------------------------------------------------------
 # Gemini 토큰 스트리밍
 # ---------------------------------------------------------------------------
-async def _stream_gemini(system_prompt: str, user_prompt: str) -> AsyncIterator[str]:
-    """Gemini 2.5 Flash로 토큰 단위 스트리밍.
+async def _stream_gemini(
+    system_prompt: str,
+    user_prompt: str,
+    conversation_history: Optional[list[dict[str, str]]] = None,
+) -> AsyncIterator[str]:
+    """Gemini 2.5 Flash로 토큰 단위 스트리밍. 대화 이력 포함.
 
     Yields:
         각 토큰 문자열 (delta).
@@ -206,8 +238,16 @@ async def _stream_gemini(system_prompt: str, user_prompt: str) -> AsyncIterator[
 
     messages: list[tuple[str, str]] = [
         ("system", system_prompt),
-        ("human", user_prompt),
     ]
+
+    if conversation_history:
+        for msg in conversation_history[-5:]:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            lc_role = "human" if role == "user" else "ai"
+            messages.append((lc_role, content))
+
+    messages.append(("human", user_prompt))
 
     async for chunk in llm.astream(messages):
         content = chunk.content
@@ -341,7 +381,7 @@ async def chat_stream(
                     "query": sub_query,
                     "thread_id": thread_id,
                     "user_id": user_id,
-                    "conversation_history": [],
+                    "conversation_history": conversation_history,
                 }
                 # intent 주입 → intent_router_node가 classify 스킵
                 if intent_value:
@@ -380,7 +420,7 @@ async def chat_stream(
                                 full_text = ""
 
                                 try:
-                                    async for delta in _stream_gemini(system_prompt, user_prompt):
+                                    async for delta in _stream_gemini(system_prompt, user_prompt, conversation_history):
                                         if await request.is_disconnected():
                                             cancelled = True
                                             break

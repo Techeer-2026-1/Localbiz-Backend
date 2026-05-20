@@ -32,6 +32,7 @@ class IntentType(StrEnum):  # pyright: ignore[reportAttributeAccessIssue]
     COST_ESTIMATE = "COST_ESTIMATE"
     CROWDEDNESS = "CROWDEDNESS"
     IMAGE_SEARCH = "IMAGE_SEARCH"
+    REFINE = "REFINE"
     # Fallback
     GENERAL = "GENERAL"
 
@@ -51,6 +52,7 @@ PHASE1_INTENTS: frozenset[IntentType] = frozenset(  # pyright: ignore[reportAssi
         IntentType.REVIEW_COMPARE,
         IntentType.CROWDEDNESS,
         IntentType.IMAGE_SEARCH,
+        IntentType.REFINE,
         IntentType.ANALYSIS,
         IntentType.COST_ESTIMATE,
         IntentType.GENERAL,
@@ -72,6 +74,7 @@ _ROUTABLE_INTENTS: frozenset[IntentType] = frozenset(  # pyright: ignore[reportA
         IntentType.REVIEW_COMPARE,
         IntentType.CROWDEDNESS,
         IntentType.IMAGE_SEARCH,
+        IntentType.REFINE,
         IntentType.ANALYSIS,
         IntentType.COST_ESTIMATE,
         IntentType.GENERAL,
@@ -100,6 +103,7 @@ Phase 1 (active):
 - CROWDEDNESS: asking about current crowdedness or population density of an area
 - COST_ESTIMATE: asking about expected cost or price range for a place, restaurant, or activity
 - IMAGE_SEARCH: user sends an image URL (http/https link ending in image extension or storage URL) to identify a place or find similar places; also when user refers to a previously sent image ("아까 그 사진", "방금 올린 이미지", "그 사진 어딘지", "이전 사진") without a new URL
+- REFINE: user wants to modify, replace, remove, add to, or regenerate a previous response. Examples: "3번 장소 바꿔줘", "그거 말고 다른 거", "카페 빼줘", "다시 추천해줘", "강남 말고 홍대로", "마음에 안 들어", "2번 행사 다른 걸로", "하나 더 추가해줘"
 - GENERAL: general conversation, greetings, or anything else
 
 Phase 2 (not yet active, classify as GENERAL for now):
@@ -126,6 +130,7 @@ Phase 1 (active):
 - REVIEW_COMPARE: comparing two or more places by 6 metrics
 - COST_ESTIMATE: asking about expected cost or price range for a place, restaurant, or activity
 - IMAGE_SEARCH: user sends an image URL to identify a place or find similar places; also when user refers to a previously sent image without a new URL
+- REFINE: user wants to modify, replace, remove, add to, or regenerate a previous response. Examples: "3번 장소 바꿔줘", "그거 말고 다른 거", "카페 빼줘", "다시 추천해줘", "강남 말고 홍대로", "마음에 안 들어", "2번 행사 다른 걸로", "하나 더 추가해줘"
 - GENERAL: general conversation, greetings, or anything else
 
 Phase 2 (not yet active, classify as GENERAL for now):
