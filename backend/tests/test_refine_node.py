@@ -129,3 +129,12 @@ def test_get_node_function_all_mapped() -> None:
     ]
     for intent in expected:
         assert _get_node_function(intent) is not None, f"{intent} not mapped"
+
+
+def test_classify_prompts_contain_not_refine_guidance() -> None:
+    """REFINE 부정 예시가 양쪽 분류 프롬프트에 포함되어 있는지 확인."""
+    from src.graph.intent_router_node import _CLASSIFY_MULTI_SYSTEM_PROMPT, _CLASSIFY_SYSTEM_PROMPT
+
+    for prompt in [_CLASSIFY_SYSTEM_PROMPT, _CLASSIFY_MULTI_SYSTEM_PROMPT]:
+        assert "NOT REFINE" in prompt, "프롬프트에 NOT REFINE 부정 예시가 없음"
+        assert "questions about previous results" in prompt or "questions about a previous response" in prompt
