@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # 전처리 생략 대상 intent — GENERAL(대화형) + IMAGE_SEARCH(URL 쿼리, 이미지 노드가 직접 파싱)
+# NOTE: REFINE은 전처리 필요 (new_condition 파싱, district/category 추출에 활용)
 _SKIP_INTENTS: frozenset[str] = frozenset({"GENERAL", "IMAGE_SEARCH"})
 
 _PREPROCESS_SYSTEM_PROMPT = """\

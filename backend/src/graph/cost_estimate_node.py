@@ -143,6 +143,21 @@ def _build_prompt(
     return "\n".join(lines)
 
 
+async def _handle_refinement(
+    state: dict[str, Any],
+    previous_blocks: list[dict[str, Any]],
+    refinement: dict[str, Any],
+) -> dict[str, Any]:
+    """COST_ESTIMATE refinement — 조건 변경 시 전체 재실행."""
+    if refinement.get("action") == "change_condition" and refinement.get("new_condition"):
+        state = dict(state)
+        state["query"] = refinement["new_condition"]
+    state = dict(state)
+    state["previous_blocks"] = None
+    state["refinement"] = None
+    return await cost_estimate_node(state)
+
+
 async def cost_estimate_node(state: dict[str, Any]) -> dict[str, Any]:
     """COST_ESTIMATE 노드 — 비용 견적 text_stream 블록 반환.
 
@@ -152,6 +167,11 @@ async def cost_estimate_node(state: dict[str, Any]) -> dict[str, Any]:
     Returns:
         {"response_blocks": [text_stream]}.
     """
+    previous_blocks = state.get("previous_blocks")
+    refinement = state.get("refinement")
+    if previous_blocks and refinement:
+        return await _handle_refinement(state, previous_blocks, refinement)
+
     from src.config import get_settings  # pyright: ignore[reportMissingImports]
 
     query: str = state.get("query", "")

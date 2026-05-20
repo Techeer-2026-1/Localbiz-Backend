@@ -659,6 +659,121 @@ def _build_blocks(
 # ---------------------------------------------------------------------------
 # LangGraph 노드
 # ---------------------------------------------------------------------------
+async def _handle_refinement(
+    state: dict[str, Any],
+    previous_blocks: list[dict[str, Any]],
+    refinement: dict[str, Any],
+) -> dict[str, Any]:
+    """COURSE_PLAN refinement 처리 — 이전 코스 기반 수정."""
+    if state.get("_refine_depth", 0) > 1:
+        clean = dict(state)
+        clean["previous_blocks"] = None
+        clean["refinement"] = None
+        return await course_plan_node(clean)
+
+    from src.graph.refine_helpers import (  # pyright: ignore[reportMissingImports]
+        apply_add,
+        apply_remove,
+        apply_replace,
+        extract_items_from_blocks,
+    )
+
+    action = refinement.get("action", "regenerate")
+    target_index = refinement.get("target_index")
+    query = state.get("query", "")
+
+    if action in ("regenerate", "change_condition"):
+        if action == "change_condition":
+            new_q = refinement.get("new_condition", query)
+            state = dict(state)
+            state["query"] = new_q
+            state["previous_blocks"] = None
+            state["refinement"] = None
+        return await course_plan_node(state)
+
+    prev_stops = extract_items_from_blocks(previous_blocks, "course")
+    if not prev_stops:
+        return await course_plan_node(state)
+
+    if action == "remove" and target_index is not None:
+        stops = apply_remove(prev_stops, target_index)
+        for i, stop in enumerate(stops, 1):
+            if isinstance(stop, dict):
+                stop["order"] = i
+    elif action in ("replace", "add"):
+        clean_state = dict(state)
+        clean_state["previous_blocks"] = None
+        clean_state["refinement"] = None
+        if action == "replace" and refinement.get("new_condition"):
+            clean_state["query"] = refinement["new_condition"]
+        result = await course_plan_node(clean_state)
+        new_blocks = result.get("response_blocks", [])
+        new_stops = extract_items_from_blocks(new_blocks, "course")
+
+        existing_ids = set()
+        for s in prev_stops:
+            if isinstance(s, dict):
+                p = s.get("place", {})
+                pid = p.get("place_id", "") if isinstance(p, dict) else ""
+                if pid:
+                    existing_ids.add(pid)
+
+        new_candidates = []
+        for s in new_stops:
+            if isinstance(s, dict):
+                p = s.get("place", {})
+                pid = p.get("place_id", "") if isinstance(p, dict) else ""
+                if pid and pid not in existing_ids:
+                    new_candidates.append(s)
+
+        if not new_candidates:
+            stops = prev_stops
+        elif action == "replace" and target_index is not None:
+            stops = apply_replace(prev_stops, target_index, new_candidates[0])
+        else:
+            stops = apply_add(prev_stops, new_candidates[0])
+
+        for i, stop in enumerate(stops, 1):
+            if isinstance(stop, dict):
+                stop["order"] = i
+    else:
+        stops = prev_stops
+
+    course_meta: dict[str, Any] = {}
+    for block in previous_blocks:
+        if isinstance(block, dict) and block.get("type") == "course":
+            course_meta = {
+                "course_id": block.get("course_id"),
+                "title": block.get("title"),
+                "description": block.get("description"),
+            }
+            break
+
+    course_block: dict[str, Any] = {
+        "type": "course",
+        "stops": stops,
+        **course_meta,
+    }
+
+    stop_names = []
+    for s in stops:
+        if isinstance(s, dict):
+            p = s.get("place", {})
+            name = p.get("name", "") if isinstance(p, dict) else ""
+            if name:
+                stop_names.append(name)
+
+    result_summary = ", ".join(stop_names)
+    prompt = (
+        f"사용자 요청: {query}\n\n수정된 코스: {result_summary}\n\n코스 전체의 테마와 매력을 2-3문장으로 요약해주세요."
+    )
+    blocks: list[dict[str, Any]] = [
+        {"type": "text_stream", "system": _COURSE_SYSTEM_PROMPT, "prompt": prompt},
+        course_block,
+    ]
+    return {"response_blocks": blocks}
+
+
 async def course_plan_node(state: dict[str, Any]) -> dict[str, Any]:
     """COURSE_PLAN 노드 — 카테고리별 병렬 검색 → Greedy NN → LLM 코스 구성 (Phase 1).
 
@@ -668,6 +783,11 @@ async def course_plan_node(state: dict[str, Any]) -> dict[str, Any]:
     Returns:
         {"response_blocks": [text_stream, course, map_route]}.
     """
+    previous_blocks = state.get("previous_blocks")
+    refinement = state.get("refinement")
+    if previous_blocks and refinement:
+        return await _handle_refinement(state, previous_blocks, refinement)
+
     from src.config import get_settings
     from src.db.opensearch import get_os_client
     from src.db.postgres import get_pool

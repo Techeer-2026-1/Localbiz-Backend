@@ -143,8 +143,28 @@ def _build_compare_blocks(
     ]
 
 
+async def _handle_refinement(
+    state: dict[str, Any],
+    previous_blocks: list[dict[str, Any]],
+    refinement: dict[str, Any],
+) -> dict[str, Any]:
+    """REVIEW_COMPARE refinement — 비교 대상 변경 시 전체 재실행."""
+    if refinement.get("action") == "change_condition" and refinement.get("new_condition"):
+        state = dict(state)
+        state["query"] = refinement["new_condition"]
+    state = dict(state)
+    state["previous_blocks"] = None
+    state["refinement"] = None
+    return await review_compare_node(state)
+
+
 async def review_compare_node(state: dict[str, Any]) -> dict[str, Any]:
     """LangGraph 노드 — REVIEW_COMPARE intent 처리 (Phase 1)."""
+    previous_blocks = state.get("previous_blocks")
+    refinement = state.get("refinement")
+    if previous_blocks and refinement:
+        return await _handle_refinement(state, previous_blocks, refinement)
+
     query: str = state.get("query", "")
     processed_query: dict[str, Any] = state.get("processed_query") or {}
 
