@@ -32,6 +32,7 @@ from src.graph.place_search_node import place_search_node  # pyright: ignore[rep
 from src.graph.query_preprocessor_node import (  # pyright: ignore[reportMissingImports]  # noqa: F401
     query_preprocessor_node,
 )
+from src.graph.refine_node import refine_node  # pyright: ignore[reportMissingImports]
 from src.graph.response_builder_node import response_builder_node  # pyright: ignore[reportMissingImports]
 from src.graph.review_compare_node import review_compare_node  # pyright: ignore[reportMissingImports]
 from src.graph.state import AgentState  # pyright: ignore[reportMissingImports]
@@ -73,6 +74,7 @@ def _route_by_intent(state: AgentState) -> str:
         "IMAGE_SEARCH": "image_search",
         "ANALYSIS": "analysis",
         "COST_ESTIMATE": "cost_estimate",
+        "REFINE": "refine",
     }
     return mapping.get(str(intent), "general")
 
@@ -108,6 +110,7 @@ def build_graph(checkpointer: Optional[Any] = None) -> Any:
     graph.add_node("image_search", image_search_node)
     graph.add_node("analysis", analysis_node)
     graph.add_node("cost_estimate", cost_estimate_node)
+    graph.add_node("refine", refine_node)
     graph.add_node("response_builder", response_builder_node)
 
     # 엣지 설정
@@ -132,6 +135,7 @@ def build_graph(checkpointer: Optional[Any] = None) -> Any:
             "image_search": "image_search",
             "analysis": "analysis",
             "cost_estimate": "cost_estimate",
+            "refine": "refine",
             "general": "general",
         },
     )
@@ -152,6 +156,7 @@ def build_graph(checkpointer: Optional[Any] = None) -> Any:
         "image_search",
         "analysis",
         "cost_estimate",
+        "refine",
     ]:
         graph.add_edge(node_name, "response_builder")
 

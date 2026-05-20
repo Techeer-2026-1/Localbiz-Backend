@@ -344,6 +344,114 @@ def _build_blocks(
 # ---------------------------------------------------------------------------
 # LangGraph 노드
 # ---------------------------------------------------------------------------
+async def _handle_refinement(
+    state: dict[str, Any],
+    previous_blocks: list[dict[str, Any]],
+    refinement: dict[str, Any],
+) -> dict[str, Any]:
+    """PLACE_SEARCH refinement 처리 — 이전 결과 기반 수정."""
+    # 재귀 depth 방어 — 무한 재귀 방지
+    if state.get("_refine_depth", 0) > 1:
+        clean = dict(state)
+        clean["previous_blocks"] = None
+        clean["refinement"] = None
+        return await place_search_node(clean)
+
+    from src.config import get_settings  # pyright: ignore[reportMissingImports]
+    from src.db.opensearch import get_os_client  # pyright: ignore[reportMissingImports]
+    from src.db.postgres import get_pool  # pyright: ignore[reportMissingImports]
+    from src.graph.refine_helpers import (  # pyright: ignore[reportMissingImports]
+        apply_add,
+        apply_remove,
+        apply_replace,
+        extract_excluded_ids,
+        extract_items_from_blocks,
+        get_refinement_search_query,
+    )
+    from src.models.blocks import attach_map_urls  # pyright: ignore[reportMissingImports]
+
+    action = refinement.get("action", "regenerate")
+    target_index = refinement.get("target_index")
+    query = state.get("query", "")
+    pq = state.get("processed_query") or {}
+
+    # regenerate / change_condition → 기존 검색 로직 그대로 재실행
+    if action in ("regenerate", "change_condition"):
+        if action == "change_condition":
+            new_q = refinement.get("new_condition", query)
+            state = dict(state)
+            state["query"] = new_q
+            state["previous_blocks"] = None
+            state["refinement"] = None
+        return await place_search_node(state)
+
+    prev_items = extract_items_from_blocks(previous_blocks, "places")
+    if not prev_items:
+        return await place_search_node(state)
+
+    settings = get_settings()
+
+    if action == "remove" and target_index is not None:
+        items = apply_remove(prev_items, target_index)
+    elif action in ("replace", "add"):
+        search_query = get_refinement_search_query(refinement, pq, query)
+        district = pq.get("district")
+        category = pq.get("category")
+        keywords = pq.get("keywords", [])
+        neighborhood = pq.get("neighborhood")
+
+        pool = get_pool()
+        pg_results = await _search_pg(pool, district, category, keywords, neighborhood)
+
+        os_results: list[dict[str, Any]] = []
+        if settings.gemini_llm_api_key:
+            try:
+                os_client = get_os_client()
+                os_results = await _search_os(os_client, search_query, settings.gemini_llm_api_key, district)
+            except RuntimeError:
+                pass
+
+        merged = _merge_results(pg_results, os_results)
+        excluded = extract_excluded_ids(prev_items, "place_id", target_index if action == "replace" else None)
+        new_candidates = [r for r in merged if r.get("place_id", "") not in excluded]
+
+        if not new_candidates:
+            items = prev_items
+        elif action == "replace" and target_index is not None:
+            new_item = new_candidates[0]
+            attach_map_urls(new_item)
+            items = apply_replace(prev_items, target_index, new_item)
+        else:  # add
+            new_item = new_candidates[0]
+            attach_map_urls(new_item)
+            items = apply_add(prev_items, new_item)
+    else:
+        items = prev_items
+
+    # 블록 재구성
+    blocks: list[dict[str, Any]] = []
+    if items:
+        for item in items:
+            attach_map_urls(item)
+        blocks.append({"type": "places", "items": items, "total_count": len(items)})
+
+    result_summary = "\n".join(
+        f"- {r.get('name', '')} ({r.get('category', '')}, {r.get('district', '')})" for r in items
+    )
+    prompt = f"사용자 요청: {query}\n\n수정된 결과:\n{result_summary}\n\n위 결과를 종합 요약해주세요."
+    blocks.append({"type": "text_stream", "system": _PLACE_SEARCH_SYSTEM_PROMPT, "prompt": prompt})
+
+    markers = [
+        {"place_id": r.get("place_id", ""), "lat": r["lat"], "lng": r["lng"], "label": r.get("name", "")}
+        for r in items
+        if r.get("lat") is not None and r.get("lng") is not None
+    ]
+    if markers:
+        blocks.append({"type": "map_markers", "markers": markers})
+
+    return {"response_blocks": blocks}
+
+
 async def place_search_node(state: dict[str, Any]) -> dict[str, Any]:
     """PLACE_SEARCH 노드 — PG + OS 하이브리드 검색.
 
@@ -353,6 +461,11 @@ async def place_search_node(state: dict[str, Any]) -> dict[str, Any]:
     Returns:
         {"response_blocks": [text_stream, places, map_markers]}.
     """
+    previous_blocks = state.get("previous_blocks")
+    refinement = state.get("refinement")
+    if previous_blocks and refinement:
+        return await _handle_refinement(state, previous_blocks, refinement)
+
     from src.config import get_settings  # pyright: ignore[reportMissingImports]
     from src.db.opensearch import get_os_client  # pyright: ignore[reportMissingImports]
     from src.db.postgres import get_pool  # pyright: ignore[reportMissingImports]

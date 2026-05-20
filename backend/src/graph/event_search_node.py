@@ -629,6 +629,74 @@ def _build_blocks(
 # ---------------------------------------------------------------------------
 # LangGraph 노드
 # ---------------------------------------------------------------------------
+async def _handle_refinement(
+    state: dict[str, Any],
+    previous_blocks: list[dict[str, Any]],
+    refinement: dict[str, Any],
+) -> dict[str, Any]:
+    """EVENT_SEARCH refinement 처리 — 이전 결과 기반 수정."""
+    if state.get("_refine_depth", 0) > 1:
+        clean = dict(state)
+        clean["previous_blocks"] = None
+        clean["refinement"] = None
+        return await event_search_node(clean)
+
+    from src.graph.refine_helpers import (  # pyright: ignore[reportMissingImports]
+        apply_add,
+        apply_remove,
+        apply_replace,
+        extract_items_from_blocks,
+    )
+
+    action = refinement.get("action", "regenerate")
+    target_index = refinement.get("target_index")
+    query = state.get("query", "")
+
+    if action in ("regenerate", "change_condition"):
+        if action == "change_condition":
+            new_q = refinement.get("new_condition", query)
+            state = dict(state)
+            state["query"] = new_q
+            state["previous_blocks"] = None
+            state["refinement"] = None
+        return await event_search_node(state)
+
+    prev_items = extract_items_from_blocks(previous_blocks, "events")
+    if not prev_items:
+        return await event_search_node(state)
+
+    if action == "remove" and target_index is not None:
+        items = apply_remove(prev_items, target_index)
+    elif action in ("replace", "add"):
+        clean_state = dict(state)
+        clean_state["previous_blocks"] = None
+        clean_state["refinement"] = None
+        if action == "replace" and refinement.get("new_condition"):
+            clean_state["query"] = refinement["new_condition"]
+        result = await event_search_node(clean_state)
+        new_blocks = result.get("response_blocks", [])
+        new_items = extract_items_from_blocks(new_blocks, "events")
+        existing_ids = {it.get("event_id", "") for it in prev_items if isinstance(it, dict)}
+        new_candidates = [it for it in new_items if it.get("event_id", "") not in existing_ids]
+
+        if not new_candidates:
+            items = prev_items
+        elif action == "replace" and target_index is not None:
+            items = apply_replace(prev_items, target_index, new_candidates[0])
+        else:
+            items = apply_add(prev_items, new_candidates[0])
+    else:
+        items = prev_items
+
+    blocks: list[dict[str, Any]] = []
+    if items:
+        blocks.append({"type": "events", "items": items, "total_count": len(items)})
+    result_summary = "\n".join(f"- {r.get('title', '')}" for r in items)
+    prompt = f"사용자 요청: {query}\n\n수정된 행사 결과:\n{result_summary}\n\n위 결과를 종합 요약해주세요."
+    blocks.append({"type": "text_stream", "system": _EVENT_SEARCH_SYSTEM_PROMPT, "prompt": prompt})
+    return {"response_blocks": blocks}
+
+
 async def event_search_node(state: dict[str, Any]) -> dict[str, Any]:
     """EVENT_SEARCH 노드 — PG 정형 + OS k-NN + LLM Rerank 행사 검색 (Phase 1).
 
@@ -638,6 +706,11 @@ async def event_search_node(state: dict[str, Any]) -> dict[str, Any]:
     Returns:
         {"response_blocks": [events, text_stream, references?]}.
     """
+    previous_blocks = state.get("previous_blocks")
+    refinement = state.get("refinement")
+    if previous_blocks and refinement:
+        return await _handle_refinement(state, previous_blocks, refinement)
+
     from src.config import get_settings  # pyright: ignore[reportMissingImports]
     from src.db.opensearch import get_os_client  # pyright: ignore[reportMissingImports]
     from src.db.postgres import get_pool  # pyright: ignore[reportMissingImports]
