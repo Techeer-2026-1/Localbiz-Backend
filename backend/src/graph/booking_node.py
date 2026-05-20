@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Optional
-from urllib.parse import quote  # 한글 장소명을 URL에 안전하게 인코딩
+from urllib.parse import quote_plus  # 한글 장소명을 URL에 안전하게 인코딩
 
 import httpx
 from cachetools import TTLCache  # 인메모리 LRU+TTL 캐시
@@ -193,7 +193,7 @@ async def _build_restaurant_links(place_name: str, db_phone: Optional[str]) -> s
     """
     settings = get_settings()
     # 한글 장소명을 URL에 안전하게 인코딩 (예: "롯데호텔" → "%EB%A1%AF%EB%8D%B0%ED%98%B8%ED%85%94")
-    encoded = quote(place_name, safe="")
+    encoded = quote_plus(place_name)
 
     website_uri: Optional[str] = None
     google_phone: Optional[str] = None
@@ -237,25 +237,40 @@ async def _build_restaurant_links(place_name: str, db_phone: Optional[str]) -> s
     return "\n".join(lines)
 
 
+def _is_valid_iso_date(value: str) -> bool:
+    """YYYY-MM-DD 형식 검증 — query_preprocessor가 raw expression("5월 21일")을 그대로 넘길 수 있음."""
+    parts = value.split("-")
+    return len(parts) == 3 and len(parts[0]) == 4 and all(p.isdigit() for p in parts)
+
+
 def _build_accommodation_links(place_name: str, pq: dict[str, Any]) -> str:
-    """숙박 — 야놀자/여기어때 URL 패턴.
+    """숙박 — 야놀자/여기어때/네이버 URL 패턴.
 
     Raises:
         _BookingError: check_in 또는 check_out이 없을 때.
-            대화 담당 팀원이 날짜를 수집해서 넘겨줘야 하는데 누락된 경우.
     """
     check_in: Optional[str] = pq.get("check_in")
     check_out: Optional[str] = pq.get("check_out")
 
-    # 날짜 없으면 노드 자체에서 방어 — "대화 팀원이 보장한다" 신뢰 가정 금지
     if not check_in or not check_out:
         raise _BookingError("체크인/체크아웃 날짜를 알려주세요. 예) '5월 10일 체크인, 5월 12일 체크아웃'")
 
-    encoded = quote(place_name, safe="")
+    encoded = quote_plus(place_name)
+
+    yanolja_url = f"https://nol.yanolja.com/discovery/s/results?keyword={encoded}"
+    goodchoice_url = f"https://www.goodchoice.kr/search?keyword={encoded}"
+    naver_url = f"https://search.naver.com/search.naver?query={encoded}+호텔+예약"
+
+    # ISO 날짜인 경우만 URL에 포함 — raw expression은 각 플랫폼이 파싱 불가
+    if _is_valid_iso_date(check_in) and _is_valid_iso_date(check_out):
+        yanolja_url += f"&checkIn={check_in}&checkOut={check_out}"
+        goodchoice_url += f"&checkIn={check_in}&checkOut={check_out}"
+
     lines = [
         "🏨 **숙박 예약하기**\n",
-        f"🟠 [야놀자](https://www.yanolja.com/search?keyword={encoded}&checkIn={check_in}&checkOut={check_out})",
-        f"🔴 [여기어때](https://www.goodchoice.kr/search?keyword={encoded}&checkIn={check_in}&checkOut={check_out})",
+        f"🟠 [야놀자]({yanolja_url})",
+        f"🔴 [여기어때]({goodchoice_url})",
+        f"🔵 [네이버 예약]({naver_url})",
     ]
     return "\n".join(lines)
 
@@ -265,7 +280,7 @@ def _build_public_links(place_name: str) -> str:
 
     P1: URL 패턴만. 서울시 API 실시간 연동은 후속 plan.
     """
-    encoded = quote(place_name, safe="")
+    encoded = quote_plus(place_name)
     lines = [
         "🏛️ **공공시설 예약하기**\n",
         f"🔵 [서울시 공공서비스예약](https://yeyak.seoul.go.kr/search?keyword={encoded})",
@@ -278,7 +293,7 @@ def _build_cultural_links(place_name: str) -> str:
 
     P1: URL 패턴만. KOPIS API 실시간 연동은 후속 plan.
     """
-    encoded = quote(place_name, safe="")
+    encoded = quote_plus(place_name)
     lines = [
         "🎭 **문화/공연 예약하기**\n",
         f"🎫 [KOPIS](https://www.kopis.or.kr/search?query={encoded})",
@@ -289,7 +304,7 @@ def _build_cultural_links(place_name: str) -> str:
 
 def _build_tourist_links(place_name: str) -> str:
     """관광지 — 네이버/카카오/구글 검색 fallback."""
-    encoded = quote(place_name, safe="")
+    encoded = quote_plus(place_name)
     lines = [
         "🗺️ **관광지 예약/입장 안내**\n",
         f"🔵 [네이버 예약](https://booking.naver.com/search?query={encoded})",
@@ -301,7 +316,7 @@ def _build_tourist_links(place_name: str) -> str:
 
 def _build_fallback_links(place_name: str) -> str:
     """기타/unknown 카테고리 — 네이버/카카오 검색 fallback."""
-    encoded = quote(place_name, safe="")
+    encoded = quote_plus(place_name)
     lines = [
         "📍 **예약 링크**\n",
         f"🔵 [네이버 검색](https://search.naver.com/search.naver?query={encoded}+예약)",
