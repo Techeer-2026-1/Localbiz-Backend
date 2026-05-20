@@ -65,6 +65,10 @@ jobs:
             rm -f /tmp/secrets.env
           fi
 
+          # Docker 정리 (디스크 부족 방지) — 미사용 이미지/캐시 제거
+          docker system prune -af --filter "until=72h" || true
+          docker builder prune -af || true
+
           # Docker 빌드 + 배포
           docker compose build api
           docker compose up -d --no-deps api
