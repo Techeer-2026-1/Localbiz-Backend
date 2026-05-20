@@ -695,20 +695,24 @@ async def _handle_refinement(
     if not prev_stops:
         return await course_plan_node(state)
 
+    no_candidate_found = False
+
     if action == "remove" and target_index is not None:
         stops = apply_remove(prev_stops, target_index)
         for i, stop in enumerate(stops, 1):
             if isinstance(stop, dict):
                 stop["order"] = i
     elif action in ("replace", "add"):
-        clean_state = dict(state)
-        clean_state["previous_blocks"] = None
-        clean_state["refinement"] = None
-        if action == "replace" and refinement.get("new_condition"):
-            clean_state["query"] = refinement["new_condition"]
-        result = await course_plan_node(clean_state)
-        new_blocks = result.get("response_blocks", [])
-        new_stops = extract_items_from_blocks(new_blocks, "course")
+        # 단건 장소 검색 — 전체 코스 재생성 대신 PG+OS에서 대체 후보 확보
+        from src.config import get_settings  # pyright: ignore[reportMissingImports]
+        from src.db.opensearch import get_os_client  # pyright: ignore[reportMissingImports]
+        from src.db.postgres import get_pool  # pyright: ignore[reportMissingImports]
+
+        settings = get_settings()
+        pq = state.get("processed_query") or {}
+        district = pq.get("district")
+        category = pq.get("category")
+        search_query = refinement.get("new_condition") or pq.get("expanded_query") or query
 
         existing_ids = set()
         for s in prev_stops:
@@ -718,20 +722,89 @@ async def _handle_refinement(
                 if pid:
                     existing_ids.add(pid)
 
-        new_candidates = []
-        for s in new_stops:
-            if isinstance(s, dict):
-                p = s.get("place", {})
-                pid = p.get("place_id", "") if isinstance(p, dict) else ""
-                if pid and pid not in existing_ids:
-                    new_candidates.append(s)
+        # PG 검색
+        pool = get_pool()
+        pg_sql = (
+            "SELECT place_id, name, category, address, district, "
+            "ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lng "
+            "FROM places WHERE is_deleted = false"
+        )
+        pg_params: list[Any] = []
+        if district:
+            pg_params.append(district)
+            pg_sql += f" AND district = ${len(pg_params)}"
+        if category:
+            pg_params.append(f"%{category}%")
+            pg_sql += f" AND category ILIKE ${len(pg_params)}"
+        pg_sql += " LIMIT 20"
 
-        if not new_candidates:
+        try:
+            pg_rows = await pool.fetch(pg_sql, *pg_params)
+            pg_places = [dict(r) for r in pg_rows]
+        except Exception:
+            logger.warning("course refine: PG 검색 실패")
+            pg_places = []
+
+        # OS k-NN 검색
+        os_places: list[dict[str, Any]] = []
+        if settings.gemini_llm_api_key:
+            try:
+                os_client = get_os_client()
+                vec = await _embed_query_768d(search_query, settings.gemini_llm_api_key)
+                body: dict[str, Any] = {
+                    "size": 10,
+                    "query": {"knn": {"embedding": {"vector": vec, "k": 10}}},
+                    "min_score": _OS_MIN_SCORE,
+                }
+                result = await os_client.search(index="places_vector", body=body)
+                for hit in result.get("hits", {}).get("hits", []):
+                    src = hit.get("_source", {})
+                    os_places.append(
+                        {
+                            "place_id": hit.get("_id", ""),
+                            "name": src.get("name", ""),
+                            "category": src.get("category", ""),
+                            "address": src.get("address", ""),
+                            "district": src.get("district", ""),
+                            "lat": src.get("lat"),
+                            "lng": src.get("lng"),
+                        }
+                    )
+            except Exception:
+                logger.warning("course refine: OS 검색 실패")
+
+        # 기존 코스에 없는 후보만 필터
+        all_candidates = os_places + pg_places
+        seen: set[str] = set()
+        new_candidates: list[dict[str, Any]] = []
+        for c in all_candidates:
+            pid = c.get("place_id", "")
+            if pid and pid not in existing_ids and pid not in seen:
+                seen.add(pid)
+                new_candidates.append(c)
+
+        no_candidate_found = not new_candidates
+        if no_candidate_found:
             stops = prev_stops
-        elif action == "replace" and target_index is not None:
-            stops = apply_replace(prev_stops, target_index, new_candidates[0])
         else:
-            stops = apply_add(prev_stops, new_candidates[0])
+            # raw place dict → course stop 형태로 래핑
+            c = new_candidates[0]
+            new_stop: dict[str, Any] = {
+                "order": target_index or (len(prev_stops) + 1),
+                "duration_min": _DEFAULT_DURATION_MIN,
+                "place": {
+                    "place_id": c.get("place_id", ""),
+                    "name": c.get("name", ""),
+                    "category": c.get("category"),
+                    "address": c.get("address"),
+                    "district": c.get("district"),
+                    "location": {"lat": c["lat"], "lng": c["lng"]} if c.get("lat") and c.get("lng") else None,
+                },
+            }
+            if action == "replace" and target_index is not None:
+                stops = apply_replace(prev_stops, target_index, new_stop)
+            else:
+                stops = apply_add(prev_stops, new_stop)
 
         for i, stop in enumerate(stops, 1):
             if isinstance(stop, dict):
@@ -764,9 +837,13 @@ async def _handle_refinement(
                 stop_names.append(name)
 
     result_summary = ", ".join(stop_names)
-    prompt = (
-        f"사용자 요청: {query}\n\n수정된 코스: {result_summary}\n\n코스 전체의 테마와 매력을 2-3문장으로 요약해주세요."
-    )
+    if action in ("replace", "add") and no_candidate_found:
+        prompt = (
+            f"사용자 요청: {query}\n\n조건에 맞는 대체 장소를 찾지 못해 기존 코스를 유지합니다. "
+            f"현재 코스: {result_summary}\n\n다른 조건으로 다시 요청해보라고 1-2문장으로 안내해주세요."
+        )
+    else:
+        prompt = f"사용자 요청: {query}\n\n수정된 코스: {result_summary}\n\n코스 전체의 테마와 매력을 2-3문장으로 요약해주세요."
     blocks: list[dict[str, Any]] = [
         {"type": "text_stream", "system": _COURSE_SYSTEM_PROMPT, "prompt": prompt},
         course_block,
