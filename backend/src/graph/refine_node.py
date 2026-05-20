@@ -149,7 +149,10 @@ def _detect_original_intent(blocks: list[dict[str, Any]]) -> Optional[str]:
         if not isinstance(block, dict):
             continue
         if block.get("type") == "intent":
-            return block.get("intent")
+            intent_val = block.get("intent")
+            # REFINE 자체는 원본 intent가 아님 — 구조화 블록으로 재추론
+            if intent_val and intent_val != "REFINE":
+                return intent_val
 
     # intent 블록 없으면 구조화 블록으로 추론
     has_references = any(isinstance(b, dict) and b.get("type") == "references" for b in blocks)
