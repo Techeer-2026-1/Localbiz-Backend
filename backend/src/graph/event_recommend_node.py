@@ -635,6 +635,8 @@ async def _handle_refinement(
     refinement: dict[str, Any],
 ) -> dict[str, Any]:
     """EVENT_RECOMMEND refinement 처리 — 이전 결과 기반 수정."""
+    from src.graph.refine_helpers import REFINE_SYSTEM_PROMPT  # pyright: ignore[reportMissingImports]
+
     if state.get("_refine_depth", 0) > 1:
         clean = dict(state)
         clean["previous_blocks"] = None
@@ -707,7 +709,7 @@ async def _handle_refinement(
         prompt = f"사용자 요청: {query}\n\n**{added}**을(를) 목록에 추가했습니다.\n수정된 목록:\n{result_summary}\n\n1-2문장으로 요약해주세요."
     else:
         prompt = f"사용자 요청: {query}\n\n수정된 행사 추천 결과:\n{result_summary}\n\n위 결과를 종합 요약해주세요."
-    blocks.append({"type": "text_stream", "system": _EVENT_RECOMMEND_SYSTEM_PROMPT, "prompt": prompt})
+    blocks.append({"type": "text_stream", "system": REFINE_SYSTEM_PROMPT, "prompt": prompt})
     return {"response_blocks": blocks}
 
 
