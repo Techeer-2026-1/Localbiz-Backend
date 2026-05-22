@@ -48,9 +48,9 @@ _CALENDAR_EXTRACT_PROMPT = """\
 {{
   "event_title": "일정 제목 (문자열, 불명확하면 null)",
   "start_time": "ISO 8601 KST 예: 2026-05-02T14:00:00+09:00 (불명확하면 null)",
-  "end_time": "ISO 8601 KST (언급 없으면 null)",
-  "location": "장소명 (언급 없으면 null)",
-  "description": "대화 맥락에서 파악한 장소 설명·코스 메모·특이사항 (없으면 null)",
+  "end_time": "ISO 8601 KST (아래 규칙 참고, 계산 불가능하면 null)",
+  "location": "첫 번째 방문 장소명 또는 대표 장소명 (언급 없으면 null)",
+  "description": "아래 규칙에 따른 코스 메모 (없으면 null)",
   "url": "대화에서 언급된 예약 URL 또는 장소 상세 링크 (없으면 null)"
 }}
 
@@ -60,6 +60,19 @@ _CALENDAR_EXTRACT_PROMPT = """\
 - 시간은 KST(+09:00) 기준. 오전/오후 표현 그대로 반영.
 - 이벤트 제목은 키워드에서 자연스럽게 유추. 예) keywords=["경복궁"] → "경복궁 방문".
 - 캘린더와 무관한 값("바보" 등)은 null 처리.
+
+[end_time 계산 규칙]
+- 대화에 코스 일정(여러 장소 + 체류시간)이 있으면: 각 장소 체류시간을 분 단위로 합산 → start_time에 더해 end_time 계산.
+  예) start_time=13:00, 명동 15분 + 홍대 30분 + 이태원 45분 = 총 90분 → end_time=14:30
+- 단일 장소이고 체류시간 언급이 있으면: start_time + 해당 시간.
+- 체류시간 언급이 전혀 없으면: null (시스템이 1시간 자동 추가).
+
+[description 포맷 규칙]
+- 코스 장소가 2개 이상이면 반드시 아래 형식으로 작성:
+  1 : 장소명 : X분
+  2 : 장소명 : X분
+  3 : 장소명 : X분
+- 단일 장소이거나 장소 목록이 없으면 자유 형식 메모 또는 null.
 """
 
 
@@ -117,7 +130,7 @@ async def calendar_node(state: AgentState) -> dict[str, Any]:
     """
     user_id: Optional[int] = state.get("user_id")
     if not user_id:
-        return {"response_blocks": [_error_block("로그인이 필요합니다.")]}
+        return {"response_blocks": [_reask_block("로그인이 필요합니다.")]}
 
     pq: Optional[dict[str, Any]] = state.get("processed_query")
     history: list[dict[str, str]] = state.get("conversation_history") or []
@@ -175,7 +188,7 @@ async def calendar_node(state: AgentState) -> dict[str, Any]:
         )
         status = "created"
     except _CalendarError as e:
-        return {"response_blocks": [_error_block(str(e))]}
+        return {"response_blocks": [_reask_block(str(e))]}
     except Exception:
         logger.exception("calendar_node: 이벤트 생성 실패")
         calendar_link = None
