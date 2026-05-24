@@ -154,10 +154,62 @@ async def test_build_blocks_recommend_prompt_keywords() -> None:
     # 추천 사유 강조 키워드가 prompt 또는 system에 등장
     assert "추천" in prompt or "추천" in system
 
-    # 빈 결과 시에도 안내 메시지에 추천 단어 포함
-    empty_blocks = _build_blocks("결과 없는 쿼리", [], [])
-    empty_ts = next(b for b in empty_blocks if b["type"] == "text_stream")
-    assert "추천" in empty_ts["prompt"] or "다른 조건" in empty_ts["prompt"]
+
+# ---------------------------------------------------------------------------
+# 빈 결과 응답 (#151)
+# ---------------------------------------------------------------------------
+async def test_build_blocks_empty_results() -> None:
+    """빈 결과: text 블록만 (text_stream 없음, LLM 호출 X). #151 G1."""
+    from src.graph.event_recommend_node import _build_blocks  # pyright: ignore[reportMissingImports]
+
+    blocks = _build_blocks("결과 없는 쿼리", [], [], pq=None)
+
+    block_types = [b["type"] for b in blocks]
+    assert block_types == ["text"]
+    assert "text_stream" not in block_types
+    assert "events" not in block_types
+    assert "references" not in block_types
+
+    text_block = blocks[0]
+    assert "찾지 못했어요" in text_block["content"]
+
+
+async def test_build_blocks_empty_with_filters() -> None:
+    """빈 결과 + 적용 필터 있을 때: lead + 적용 조건 + "💡 ... 풀어서" (#151 G2/G3)."""
+    from src.graph.event_recommend_node import _build_blocks  # pyright: ignore[reportMissingImports]
+
+    pq = {
+        "district": "강남구",
+        "category": "전시회",
+        "date_start_resolved": "2026-05-20",
+        "date_end_resolved": "2026-05-26",
+        "keywords": ["전시회"],
+    }
+    blocks = _build_blocks("이번 주 강남구 전시회", [], [], pq=pq)
+
+    assert [b["type"] for b in blocks] == ["text"]
+    content = blocks[0]["content"]
+    assert "찾지 못했어요" in content
+    assert "적용된 조건:" in content
+    assert "• 자치구: 강남구" in content
+    assert "• 카테고리: 전시회" in content
+    assert "• 기간: 2026-05-20 ~ 2026-05-26" in content
+    assert "• 키워드: 전시회" in content
+    assert "💡 기간을 더 넓혀보거나" in content
+
+
+async def test_build_blocks_empty_no_filters() -> None:
+    """빈 결과 + 필터 없음: '다른 검색어' 가이드 (#151 G3)."""
+    from src.graph.event_recommend_node import _build_blocks  # pyright: ignore[reportMissingImports]
+
+    blocks = _build_blocks("아무 쿼리", [], [], pq={})
+
+    assert [b["type"] for b in blocks] == ["text"]
+    content = blocks[0]["content"]
+    assert "찾지 못했어요" in content
+    assert "적용된 조건:" not in content
+    assert "💡 다른 검색어로 시도해보세요." in content
+    assert "풀어서" not in content
 
 
 # ---------------------------------------------------------------------------

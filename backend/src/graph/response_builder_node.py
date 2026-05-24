@@ -67,6 +67,11 @@ def _validate_block_order(
 
     # 선택적 블록 제외 후 비교
     actual_required = [t for t in block_types if t not in _OPTIONAL_BLOCKS]
+
+    # 빈 결과 정적 응답 — 모든 intent 공통(#151). 향후 PLACE 등 동일 패턴 노드 확장 호환.
+    if actual_required == ["intent", "text", "done"]:
+        return None
+
     if actual_required != expected:
         return f"블록 순서 불일치 [{intent}]: expected={expected}, actual={actual_required}"
 

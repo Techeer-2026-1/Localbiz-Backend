@@ -140,19 +140,59 @@ async def test_build_blocks_with_naver_fallback() -> None:
 
 
 async def test_build_blocks_empty_results() -> None:
-    """검색 결과 0건: text_stream 블록만 생성 (events / references 없음)."""
+    """검색 결과 0건: text 블록만 생성 (text_stream/events/references 없음). #151."""
     from src.graph.event_search_node import _build_blocks  # pyright: ignore[reportMissingImports]
 
-    blocks = _build_blocks("결과 없는 쿼리", [], [])
+    blocks = _build_blocks("결과 없는 쿼리", [], [], pq=None)
 
     block_types = [b["type"] for b in blocks]
-    assert "text_stream" in block_types
+    # 빈 결과는 LLM 호출 없이 정적 text 1개만 (G1)
+    assert block_types == ["text"]
+    assert "text_stream" not in block_types
     assert "events" not in block_types
     assert "references" not in block_types
 
-    # text_stream에 "검색 결과가 없습니다" 안내
-    ts_block = next(b for b in blocks if b["type"] == "text_stream")
-    assert "검색 결과가 없습니다" in ts_block["prompt"]
+    # text 블록에 lead 문구 포함
+    text_block = blocks[0]
+    assert "찾지 못했어요" in text_block["content"]
+
+
+async def test_build_blocks_empty_with_filters() -> None:
+    """빈 결과 + 적용 필터 있을 때: lead + 적용 조건 + "💡 ... 풀어서" 가이드 (#151 G2/G3)."""
+    from src.graph.event_search_node import _build_blocks  # pyright: ignore[reportMissingImports]
+
+    pq = {
+        "district": "강남구",
+        "category": "전시회",
+        "date_start_resolved": "2026-05-20",
+        "date_end_resolved": "2026-05-26",
+        "keywords": ["전시회"],
+    }
+    blocks = _build_blocks("이번 주 강남구 전시회", [], [], pq=pq)
+
+    assert [b["type"] for b in blocks] == ["text"]
+    content = blocks[0]["content"]
+    assert "찾지 못했어요" in content
+    assert "적용된 조건:" in content
+    assert "• 자치구: 강남구" in content
+    assert "• 카테고리: 전시회" in content
+    assert "• 기간: 2026-05-20 ~ 2026-05-26" in content
+    assert "• 키워드: 전시회" in content
+    assert "💡 기간을 더 넓혀보거나" in content
+
+
+async def test_build_blocks_empty_no_filters() -> None:
+    """빈 결과 + 필터 없을 때: 적용 조건 섹션 생략, 가이드는 '다른 검색어' 안내 (#151 G3)."""
+    from src.graph.event_search_node import _build_blocks  # pyright: ignore[reportMissingImports]
+
+    blocks = _build_blocks("아무 쿼리", [], [], pq={})
+
+    assert [b["type"] for b in blocks] == ["text"]
+    content = blocks[0]["content"]
+    assert "찾지 못했어요" in content
+    assert "적용된 조건:" not in content
+    assert "💡 다른 검색어로 시도해보세요." in content
+    assert "풀어서" not in content  # 필터 없으니 "풀어서" 안내 안 나옴
 
 
 # ---------------------------------------------------------------------------
