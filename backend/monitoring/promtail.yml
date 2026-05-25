@@ -25,4 +25,5 @@ scrape_configs:
       - target_label: job
         replacement: localbiz-api
       - target_label: env
-        replacement: production
+        # PROMTAIL_ENV는 docker-compose에서 주입 (config.expand-env 활성). 미설정 시 'local'.
+        replacement: ${PROMTAIL_ENV:-local}

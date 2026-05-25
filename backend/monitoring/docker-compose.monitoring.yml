@@ -31,7 +31,8 @@ services:
     ports:
       - "3001:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      # 로컬은 default admin 유지(throwaway). GCE 배포 시 .env에 GRAFANA_ADMIN_PASSWORD 설정 강제.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_AUTH_ANONYMOUS_ENABLED: "false"
     volumes:
       - grafana_data:/var/lib/grafana
