@@ -207,3 +207,21 @@ async def test_intent_router_node_no_injection() -> None:
     mock_classify.assert_called_once_with("안녕", None)
     assert result["intent"] == "GENERAL"
     assert result["response_blocks"][0]["intent"] == "GENERAL"
+
+
+# ---------------------------------------------------------------------------
+# 프롬프트 가드 — SEARCH vs RECOMMEND 판별 규칙 존재 확인
+# ---------------------------------------------------------------------------
+
+
+async def test_classify_prompts_have_search_recommend_guidance() -> None:
+    """'찾아줘/알려줘'(SEARCH)를 RECOMMEND로 오분류하던 문제 교정 규칙 보존.
+
+    라이브 검증(2026-05-25)에서 EVENT_SEARCH/PLACE_SEARCH 쿼리가 RECOMMEND로
+    오분류되어 프롬프트에 판별 규칙을 추가했다. 실수로 제거되지 않도록 가드한다.
+    """
+    from src.graph import intent_router_node as mod  # pyright: ignore[reportMissingImports]
+
+    for prompt in (mod._CLASSIFY_MULTI_SYSTEM_PROMPT, mod._CLASSIFY_SYSTEM_PROMPT):
+        assert "SEARCH vs RECOMMEND" in prompt
+        assert "prefer SEARCH" in prompt
