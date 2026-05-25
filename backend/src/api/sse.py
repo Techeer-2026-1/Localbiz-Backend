@@ -93,6 +93,15 @@ def format_error_event(
 
 
 # ---------------------------------------------------------------------------
+# 글로벌 페르소나 — 모든 text_stream 응답에 일관 적용
+# ---------------------------------------------------------------------------
+_GLOBAL_PERSONA = (
+    "너는 서울 로컬 라이프 AI 챗봇 AnyWay야.\n"
+    "말투: 친절하고 자연스러운 존댓말(~요 체), 서론·인사 없이 바로 핵심부터, 간결하게.\n"
+    "이모지는 꼭 필요한 경우에만 최소로 사용해."
+)
+
+# ---------------------------------------------------------------------------
 # 노드별 status 메시지 (SSE 제어 이벤트, DB 미저장)
 # ---------------------------------------------------------------------------
 _NODE_STATUS_MESSAGES: dict[str, str] = {
@@ -420,7 +429,10 @@ async def chat_stream(
                                 continue
 
                             if block_type == "text_stream":
-                                system_prompt = block.get("system", "")
+                                node_system = block.get("system", "")
+                                system_prompt = (
+                                    f"{_GLOBAL_PERSONA}\n\n{node_system}" if node_system else _GLOBAL_PERSONA
+                                )
                                 user_prompt = block.get("prompt", sub_query)
                                 full_text = ""
 
