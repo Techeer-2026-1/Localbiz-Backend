@@ -59,6 +59,17 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  promtail:
+    image: grafana/promtail:3.2.0
+    container_name: localbiz-promtail
+    volumes:
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - LOKI_HOST=${LOKI_HOST:-10.178.0.4}
+    command: -config.file=/etc/promtail/config.yml -config.expand-env=true
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   opensearch_data:
