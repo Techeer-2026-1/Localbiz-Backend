@@ -47,7 +47,7 @@ def _make_pool_mock(has_token: bool = True) -> Any:
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_missing_user_id_returns_error() -> None:
-    """user_id 미입력 시 로그인 안내 error 블록 반환."""
+    """user_id 미입력 시 로그인 안내 text_stream 블록 반환."""
     state: dict[str, Any] = {
         "processed_query": {"keywords": ["경복궁"]},
         "conversation_history": [],
@@ -55,8 +55,8 @@ async def test_missing_user_id_returns_error() -> None:
     result = await calendar_node(state)  # type: ignore[arg-type]
     blocks = result["response_blocks"]
     assert len(blocks) == 1
-    assert blocks[0]["type"] == "error"
-    assert "로그인" in blocks[0]["message"]
+    assert blocks[0]["type"] == "text_stream"
+    assert "로그인" in blocks[0]["prompt"]
 
 
 @pytest.mark.asyncio
@@ -126,8 +126,8 @@ async def test_no_oauth_token_returns_error() -> None:
         result = await calendar_node(state)  # type: ignore[arg-type]
 
     blocks = result["response_blocks"]
-    assert blocks[0]["type"] == "error"
-    assert "Google" in blocks[0]["message"]
+    assert blocks[0]["type"] == "text_stream"
+    assert "Google" in blocks[0]["prompt"]
 
 
 # ---------------------------------------------------------------------------
