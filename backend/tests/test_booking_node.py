@@ -98,7 +98,7 @@ async def test_restaurant_with_google_places_returns_text_stream() -> None:
     blocks = result["response_blocks"]
     assert blocks[0]["type"] == "text_stream"
     assert "example.com" in blocks[0]["prompt"]
-    assert "booking.naver.com" in blocks[0]["prompt"]
+    assert "map.naver.com" in blocks[0]["prompt"]
 
 
 @pytest.mark.asyncio
@@ -169,7 +169,7 @@ async def test_tourist_category_returns_tourist_links() -> None:
 
     blocks = result["response_blocks"]
     assert blocks[0]["type"] == "text_stream"
-    assert "booking.naver.com" in blocks[0]["prompt"]
+    assert "map.naver.com" in blocks[0]["prompt"]
     assert "kopis" not in blocks[0]["prompt"].lower()
 
 
@@ -295,7 +295,7 @@ async def test_tourist_category_with_dates_returns_accommodation_links() -> None
     blocks = result["response_blocks"]
     assert blocks[0]["type"] == "text_stream"
     assert "yanolja.com" in blocks[0]["prompt"]
-    assert "goodchoice.kr" in blocks[0]["prompt"]
+    assert "search.naver.com" in blocks[0]["prompt"]
 
 
 @pytest.mark.asyncio
@@ -314,4 +314,4 @@ async def test_unknown_category_returns_naver_fallback() -> None:
 
     blocks = result["response_blocks"]
     assert blocks[0]["type"] == "text_stream"
-    assert "search.naver.com" in blocks[0]["prompt"]
+    assert "map.naver.com" in blocks[0]["prompt"]

@@ -229,8 +229,8 @@ async def _build_restaurant_links(place_name: str, db_phone: Optional[str]) -> s
         lines.append(f"🌐 [공식 홈페이지]({website_uri})")
 
     # URL 패턴 기반 링크 (항상 포함)
-    lines.append(f"🔵 [네이버 예약](https://booking.naver.com/search?query={encoded})")
-    lines.append(f"🟡 [카카오맵](https://place.map.kakao.com/search?q={encoded})")
+    lines.append(f"🔵 [네이버 지도](https://map.naver.com/p/search/{encoded})")
+    lines.append(f"🟡 [카카오맵](https://map.kakao.com/?q={encoded})")
 
     if phone:
         lines.append(f"📞 전화 예약: {phone}")
@@ -259,19 +259,16 @@ def _build_accommodation_links(place_name: str, pq: dict[str, Any]) -> str:
     encoded = quote_plus(place_name)
 
     yanolja_url = f"https://nol.yanolja.com/discovery/s/results?keyword={encoded}"
-    goodchoice_url = f"https://www.goodchoice.kr/search?keyword={encoded}"
     naver_url = f"https://search.naver.com/search.naver?query={encoded}+호텔+예약"
 
     # ISO 날짜인 경우만 URL에 포함 — raw expression은 각 플랫폼이 파싱 불가
     if _is_valid_iso_date(check_in) and _is_valid_iso_date(check_out):
         yanolja_url += f"&checkIn={check_in}&checkOut={check_out}"
-        goodchoice_url += f"&checkIn={check_in}&checkOut={check_out}"
 
     lines = [
         "🏨 **숙박 예약하기**\n",
         f"🟠 [야놀자]({yanolja_url})",
-        f"🔴 [여기어때]({goodchoice_url})",
-        f"🔵 [네이버 예약]({naver_url})",
+        f"🔵 [네이버 검색]({naver_url})",
     ]
     return "\n".join(lines)
 
@@ -284,7 +281,8 @@ def _build_public_links(place_name: str) -> str:
     encoded = quote_plus(place_name)
     lines = [
         "🏛️ **공공시설 예약하기**\n",
-        f"🔵 [서울시 공공서비스예약](https://yeyak.seoul.go.kr/search?keyword={encoded})",
+        f"🔵 [서울시 공공서비스예약](https://yeyak.seoul.go.kr/web/main.do) — '{place_name}' 직접 검색",
+        f"🔵 [네이버 지도](https://map.naver.com/p/search/{encoded})",
     ]
     return "\n".join(lines)
 
@@ -298,7 +296,8 @@ def _build_cultural_links(place_name: str) -> str:
     lines = [
         "🎭 **문화/공연 예약하기**\n",
         f"🎫 [KOPIS](https://www.kopis.or.kr/search?query={encoded})",
-        f"🎟️ [인터파크](https://ticket.interpark.com/search?query={encoded})",
+        f"🎟️ [인터파크 티켓](https://tickets.interpark.com/search?keyword={encoded})",
+        f"🔵 [네이버 지도](https://map.naver.com/p/search/{encoded})",
     ]
     return "\n".join(lines)
 
@@ -308,8 +307,8 @@ def _build_tourist_links(place_name: str) -> str:
     encoded = quote_plus(place_name)
     lines = [
         "🗺️ **관광지 예약/입장 안내**\n",
-        f"🔵 [네이버 예약](https://booking.naver.com/search?query={encoded})",
-        f"🟡 [카카오맵](https://place.map.kakao.com/search?q={encoded})",
+        f"🔵 [네이버 지도](https://map.naver.com/p/search/{encoded})",
+        f"🟡 [카카오맵](https://map.kakao.com/?q={encoded})",
         f"🌐 [구글 검색](https://www.google.com/search?q={encoded}+예약)",
     ]
     return "\n".join(lines)
@@ -320,8 +319,8 @@ def _build_fallback_links(place_name: str) -> str:
     encoded = quote_plus(place_name)
     lines = [
         "📍 **예약 링크**\n",
-        f"🔵 [네이버 검색](https://search.naver.com/search.naver?query={encoded}+예약)",
-        f"🟡 [카카오맵](https://place.map.kakao.com/search?q={encoded})",
+        f"🔵 [네이버 지도](https://map.naver.com/p/search/{encoded})",
+        f"🟡 [카카오맵](https://map.kakao.com/?q={encoded})",
     ]
     return "\n".join(lines)
 
