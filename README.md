@@ -48,6 +48,24 @@ claude                    # → "places 테이블 컬럼 조회해줘" 입력
 
 ---
 
+## 모니터링 (로컬)
+
+백엔드(`localhost:8000`)가 떠 있는 상태에서:
+
+```bash
+cd backend
+docker compose -f monitoring/docker-compose.monitoring.yml up -d
+```
+
+- **Prometheus**: <http://localhost:9091> → Status → Targets에서 `localbiz-backend` UP 확인
+  - ※ 호스트 9091 → 컨테이너 9090. 다른 프로젝트의 prometheus(9090)와 충돌 회피용. Grafana ↔ Prometheus는 도커 네트워크 내부 통신이라 영향 없음.
+- **Grafana**: <http://localhost:3001> (admin / admin) — **FastAPI Overview** 대시보드 자동 로드 (RPS · Latency p50/p95/p99 · Error rate · Requests by Status)
+- 백엔드 메트릭 raw: <http://localhost:8000/metrics>
+
+각 개발자가 본인 PC에서 띄워 본인 백엔드 트래픽만 봅니다. 설정·대시보드 정의는 git에 있어 환경은 통일. Loki(로그)·Jaeger(트레이싱)·GCE 배포는 후속 이슈.
+
+---
+
 ## 디렉터리 구조
 
 ```

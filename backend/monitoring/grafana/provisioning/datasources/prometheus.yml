@@ -1,0 +1,11 @@
+# Grafana datasource 자동 등록 (#155)
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus  # 대시보드 JSON의 datasource.uid 참조와 매칭 (없으면 자동 생성된 uid라 패널이 No data)
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

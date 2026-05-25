@@ -1,0 +1,14 @@
+# Grafana dashboard provider 자동 등록 (#155)
+apiVersion: 1
+
+providers:
+  - name: localbiz-default
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

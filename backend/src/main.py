@@ -90,6 +90,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Prometheus 메트릭 노출 (#155). /metrics 엔드포인트로 기본 메트릭 5종 expose.
+# `/health`·`/metrics` 자체 호출은 통계에서 제외(노이즈·자기참조 방지).
+# `include_in_schema=False`로 OpenAPI 스펙엔 노출 안 됨.
+# 로컬 한정 — GCE 배포 시 인증/IP allowlist 별도 처리 필요.
+from prometheus_fastapi_instrumentator import Instrumentator  # noqa: E402  # pyright: ignore[reportMissingImports]
+
+Instrumentator(
+    excluded_handlers=["/health", "/metrics"],
+).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
 
 # --- 라우터 등록 ---
 # 각 파일에서 정의한 router를 앱에 연결.
