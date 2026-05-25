@@ -62,13 +62,16 @@ async def booking_node(state: AgentState) -> dict[str, Any]:
             "response_blocks": [_ask_block("체크인/체크아웃 날짜를 알려주세요. 예) '6월 10일 체크인, 12일 체크아웃'")]
         }
 
-    cache_key = f"{place_name}:{check_in}:{check_out}"
+    cache_key = f"{place_name}:{category}:{check_in}:{check_out}"
     if cache_key in _booking_cache:
         logger.info("booking_node: cache hit place=%s", place_name)
         return {"response_blocks": [_text_stream_block(_booking_cache[cache_key])]}
 
     booking_info = await _search_booking_info(place_name, category, check_in, check_out)
-    _booking_cache[cache_key] = booking_info
+    if booking_info is not None:
+        _booking_cache[cache_key] = booking_info
+    else:
+        booking_info = f"'{place_name}' 예약 정보 조회 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
 
     return {"response_blocks": [_text_stream_block(booking_info)]}
 
@@ -78,8 +81,8 @@ async def _search_booking_info(
     category: str,
     check_in: str,
     check_out: str,
-) -> str:
-    """Gemini Google Search grounding으로 예약 정보 검색."""
+) -> Optional[str]:
+    """Gemini Google Search grounding으로 예약 정보 검색. 실패 시 None 반환."""
     from google import genai  # pyright: ignore[reportMissingImports,reportAttributeAccessIssue]
     from google.genai import types  # pyright: ignore[reportMissingImports]
 
@@ -102,7 +105,7 @@ async def _search_booking_info(
         return resp.text or f"'{place_name}' 예약 정보를 찾지 못했어요. 직접 검색하거나 전화 문의해 주세요."
     except Exception:
         logger.warning("booking_node: grounding 실패 place=%s", place_name)
-        return f"'{place_name}' 예약 정보 조회 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
+        return None
 
 
 def _text_stream_block(booking_info: str) -> dict[str, Any]:
