@@ -69,9 +69,13 @@ jobs:
           docker system prune -af --filter "until=72h" || true
           docker builder prune -af || true
 
+          # 잔재 컨테이너 강제 정리 (#148) — 이전 deploy가 중간 실패 시 남긴
+          # rename 임시 컨테이너(예: <hash>_localbiz-api)와 이름 충돌 방지.
+          docker ps -a --format '{{.Names}}' | grep -E '(^|_)localbiz-api$' | xargs -r docker rm -f 2>/dev/null || true
+
           # Docker 빌드 + 배포
           docker compose build api
-          docker compose up -d --no-deps api
+          docker compose up -d --no-deps api --remove-orphans
 
           # 헬스체크 (최대 60초)
           for i in $(seq 1 30); do
