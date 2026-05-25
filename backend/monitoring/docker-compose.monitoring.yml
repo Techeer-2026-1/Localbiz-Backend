@@ -1,12 +1,14 @@
-# 로컬 모니터링 스택 (#155) — Prometheus + Grafana
+# 모니터링 스택 — Prometheus + Grafana + Loki + Jaeger
 #
-# 기동: `cd backend && docker compose -f monitoring/docker-compose.monitoring.yml up -d`
-#   - Prometheus: http://localhost:9091 (Status → Targets에서 백엔드 UP 확인)
-#     ※ 호스트 9091 → 컨테이너 9090. 다른 프로젝트의 prometheus가 9090을 쓰는 경우와 충돌 회피.
-#     ※ Grafana → Prometheus는 도커 네트워크 내부 통신(http://prometheus:9090)이라 영향 없음.
-#   - Grafana:    http://localhost:3001 (admin / admin) — "FastAPI Overview" 자동 로드
+# 기동 (GCE 모니터링 VM 또는 로컬):
+#   cd backend && docker compose -f monitoring/docker-compose.monitoring.yml up -d
 #
-# Loki(로그)·Jaeger(트레이싱)는 후속 이슈에서 활성화 — loki.yml·tempo 설정 추가 필요.
+#   - Prometheus : http://<host>:9091  (Status → Targets에서 localbiz-backend UP 확인)
+#   - Grafana    : http://<host>:3001  (admin / admin) — FastAPI Overview 자동 로드
+#   - Loki       : http://<host>:3100  (Grafana → Explore → Loki 로그 조회)
+#   - Jaeger UI  : http://<host>:16686 (트레이스 조회)
+#
+# Promtail은 API VM의 docker-compose.yml에서 사이드카로 실행 (로그 → Loki 전송).
 
 services:
   prometheus:
@@ -21,7 +23,6 @@ services:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.retention.time=15d'
     extra_hosts:
-      # Linux에서 host.docker.internal을 호스트 게이트웨이로 해석 (macOS/Windows는 native 지원)
       - "host.docker.internal:host-gateway"
 
   grafana:
@@ -30,31 +31,36 @@ services:
     ports:
       - "3001:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin  # 로컬 한정. GCE 배포 시 시크릿 처리
+      # 로컬은 default admin 유지(throwaway). GCE 배포 시 .env에 GRAFANA_ADMIN_PASSWORD 설정 강제.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_AUTH_ANONYMOUS_ENABLED: "false"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
       - ./grafana/dashboards:/etc/grafana/dashboards
 
-  # ─── 후속 이슈에서 활성화 ──────────────────────────────────────
-  # loki:
-  #   image: grafana/loki:3.2.0
-  #   container_name: localbiz-loki
-  #   ports:
-  #     - "3100:3100"
-  #   volumes:
-  #     - ./loki.yml:/etc/loki/local-config.yaml   # 별도 PR에서 추가
-  #     - loki_data:/loki
-  #
-  # jaeger:
-  #   image: jaegertracing/all-in-one:1.60
-  #   container_name: localbiz-jaeger
-  #   ports:
-  #     - "6831:6831/udp"
-  #     - "16686:16686"
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: localbiz-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    container_name: localbiz-jaeger
+    ports:
+      - "6831:6831/udp"
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
 
 volumes:
   prometheus_data:
   grafana_data:
-  # loki_data:
+  loki_data:

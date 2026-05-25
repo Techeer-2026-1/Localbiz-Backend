@@ -100,6 +100,10 @@ Instrumentator(
     excluded_handlers=["/health", "/metrics"],
 ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
+from src.telemetry import setup_tracing  # noqa: E402  # pyright: ignore[reportMissingImports]
+
+setup_tracing(app)
+
 
 # --- 라우터 등록 ---
 # 각 파일에서 정의한 router를 앱에 연결.
