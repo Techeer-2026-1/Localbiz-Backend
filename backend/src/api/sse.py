@@ -158,6 +158,9 @@ async def _load_recent_history(pool: Any, thread_id: str) -> list[dict[str, str]
                 parts.append(block.get("content", ""))
             elif btype == "text_stream" and role == "assistant":
                 parts.append(block.get("content", ""))
+            elif btype == "text" and role == "assistant":
+                # #151: EVENT 빈 결과 정적 안내(text 블록)도 다음 턴 컨텍스트에 포함
+                parts.append(block.get("content", ""))
             elif btype == "places" and role == "assistant":
                 items = block.get("items", [])
                 names = [it.get("name", "") for it in items if isinstance(it, dict) and it.get("name")]

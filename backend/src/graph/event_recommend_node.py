@@ -83,6 +83,9 @@ _NAVER_DISPLAY = 5  # Naver API에서 가져올 최대 결과 수
 _NAVER_TIMEOUT = 5.0  # 초
 _NAVER_BLOG_URL = "https://openapi.naver.com/v1/search/blog.json"
 
+# 빈 결과 응답 lead (#151) — 노드별 차별화
+_EMPTY_LEAD_LINE = "추천할 만한 행사를 찾지 못했어요."
+
 
 # ---------------------------------------------------------------------------
 # Gemini 768d 임베딩 (place_recommend_node 동일 로직 복제 — Simplicity First)
@@ -522,16 +525,57 @@ async def _llm_rerank(
 # ---------------------------------------------------------------------------
 # 블록 생성 — EVENT_SEARCH와 차별화: 추천 사유 강조 + references 항상 포함
 # ---------------------------------------------------------------------------
+def _build_empty_blocks(query: str, pq: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+    """결과 0건 응답 — LLM 호출 없이 정적 text 블록 1개 (#151).
+
+    Phase: P1 — EVENT 빈 결과 일관화. 적용된 필터를 가시화하고 고정 가이드 1줄을
+    제공해 사용자가 어떤 조건을 풀지 직접 결정하게 한다 (자동 진단 X).
+    """
+    pq = pq or {}
+    lines: list[str] = [_EMPTY_LEAD_LINE, ""]
+
+    filters: list[str] = []
+    if pq.get("district"):
+        filters.append(f"• 자치구: {pq['district']}")
+    if pq.get("category"):
+        filters.append(f"• 카테고리: {pq['category']}")
+    ds, de = pq.get("date_start_resolved"), pq.get("date_end_resolved")
+    if ds and de:
+        filters.append(f"• 기간: {ds} ~ {de}")
+    kw = pq.get("keywords") or []
+    if kw:
+        filters.append(f"• 키워드: {', '.join(kw[:5])}")
+
+    if filters:
+        lines.append("적용된 조건:")
+        lines.extend(filters)
+        lines.append("")
+        guide = "💡 기간을 더 넓혀보거나, 자치구·카테고리 중 하나를 풀어서 다시 시도해보세요."
+    else:
+        guide = "💡 다른 검색어로 시도해보세요."
+
+    lines.append(guide)
+    _ = query
+    return [{"type": "text", "content": "\n".join(lines)}]
+
+
 def _build_blocks(
     query: str,
     events: list[dict[str, Any]],
     descriptions: list[str],
+    pq: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     """추천 결과 → events(+description) + text_stream(종합 요약) + references 블록.
+
+    빈 결과(events=[])는 LLM 호출 없이 `_build_empty_blocks`로 즉시 반환 (#151).
 
     EVENT_SEARCH와 차별화:
       - references 블록은 DB + Naver 모두 포함 (detail_url 있으면)
     """
+    # 빈 결과는 LLM 호출 없이 정적 안내 1개 (#151)
+    if not events:
+        return _build_empty_blocks(query, pq)
+
     blocks: list[dict[str, Any]] = []
 
     # 1. events 블록 (카드 먼저 전송)
@@ -583,16 +627,12 @@ def _build_blocks(
             }
         )
 
-    # 2. text_stream: 종합 요약 (카드 뒤에 스트리밍)
-    if events:
-        result_summary = "\n".join(
-            f"- {e.get('title', '')} ({e.get('category') or '카테고리 미정'}, "
-            f"{e.get('district') or e.get('source', '')})"
-            for e in events
-        )
-        prompt = f"사용자 질문: {query}\n\n추천 결과:\n{result_summary}\n\n위 추천 결과를 종합 요약해주세요."
-    else:
-        prompt = f"사용자 질문: {query}\n\n추천 가능한 행사가 없습니다. 다른 조건(자치구/카테고리/날짜)을 제안해주세요."
+    # 2. text_stream: 종합 요약 (카드 뒤에 스트리밍) — 빈 결과는 위에서 early return됨
+    result_summary = "\n".join(
+        f"- {e.get('title', '')} ({e.get('category') or '카테고리 미정'}, {e.get('district') or e.get('source', '')})"
+        for e in events
+    )
+    prompt = f"사용자 질문: {query}\n\n추천 결과:\n{result_summary}\n\n위 추천 결과를 종합 요약해주세요."
 
     blocks.append(
         {
@@ -794,7 +834,7 @@ async def event_recommend_node(state: dict[str, Any]) -> dict[str, Any]:
     reranked, descriptions = await _llm_rerank(merged, query, keywords)
 
     # 6) 블록 생성
-    blocks = _build_blocks(query, reranked, descriptions)
+    blocks = _build_blocks(query, reranked, descriptions, pq)
 
     logger.info(
         "event_recommend: pg=%d, os=%d, merged(pg∪os)=%d, naver=%d, final=%d (district=%s, category=%s)",
