@@ -80,7 +80,7 @@ async def _search_booking_info(
     check_out: str,
 ) -> str:
     """Gemini Google Search grounding으로 예약 정보 검색."""
-    from google import genai  # pyright: ignore[reportMissingImports]
+    from google import genai  # pyright: ignore[reportMissingImports,reportAttributeAccessIssue]
     from google.genai import types  # pyright: ignore[reportMissingImports]
 
     settings = get_settings()
