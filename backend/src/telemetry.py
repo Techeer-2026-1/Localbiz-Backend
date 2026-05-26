@@ -23,9 +23,13 @@ def setup_tracing(app: FastAPI) -> None:
 
     jaeger_port = int(os.getenv("JAEGER_PORT", "6831"))
     # service.name 미설정 시 Jaeger UI에 'unknown_service'로 표시됨. OTEL_SERVICE_NAME 환경변수 우선, default 'localbiz-api'.
-    service_name = os.getenv("OTEL_SERVICE_NAME", "localbiz-api")
+    # 빈/공백 값은 default로 대체 — env에 빈 문자열만 들어있으면 unknown_service로 다시 떨어지는 함정 회피.
+    service_name = os.getenv("OTEL_SERVICE_NAME", "").strip() or "localbiz-api"
     # /health, /metrics는 GCE 헬스체크·Prometheus scrape로 초마다 호출돼 trace를 도배함 — 분석 노이즈 회피.
-    excluded_urls = os.getenv("OTEL_EXCLUDED_URLS", "/health,/metrics")
+    # 각 항목 trim — env에 `"/health, /metrics"` 형태로 공백 섞여 들어와도 정확히 매칭되도록.
+    excluded_urls = ",".join(
+        u.strip() for u in os.getenv("OTEL_EXCLUDED_URLS", "/health,/metrics").split(",") if u.strip()
+    )
 
     # 1) 의존성 누락은 ImportError로 명확히 구분 — silent fail 회피, 무엇이 빠졌는지 로그에 노출.
     try:
