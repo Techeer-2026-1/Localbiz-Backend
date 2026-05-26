@@ -50,24 +50,27 @@ jobs:
       # ② 배포 파일 준비 (runner에서 시크릿 치환)
       - name: Prepare deploy files
         run: |
-          # 시크릿 파일 — 따옴표 없는 heredoc이므로 runner에서 변수 치환됨
-          cat > /tmp/secrets.env <<EOF
+          # 시크릿 파일 — 따옴표 없는 heredoc이므로 runner에서 변수 치환됨.
+          # 파일명에 run_id를 붙여 서버 /tmp에서 이전 런 잔재(다른 유저 소유)와 충돌 회피.
+          cat > /tmp/secrets-${{ github.run_id }}.env <<EOF
           GOOGLE_CALENDAR_CLIENT_ID=${GOOGLE_CALENDAR_CLIENT_ID}
           GOOGLE_CALENDAR_CLIENT_SECRET=${GOOGLE_CALENDAR_CLIENT_SECRET}
           GOOGLE_CALENDAR_REDIRECT_URI=${GOOGLE_CALENDAR_REDIRECT_URI}
           GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
           EOF
 
-          # 배포 스크립트 — 따옴표 있는 heredoc이므로 치환 없이 그대로 전송
-          cat > /tmp/deploy.sh <<'SCRIPT'
+          # 배포 스크립트 — 따옴표 있는 heredoc이므로 치환 없이 그대로 전송.
+          # 시크릿 파일 경로는 실행 시 $1로 전달받는다(아래 ssh --command 참조).
+          cat > /tmp/deploy-${{ github.run_id }}.sh <<'SCRIPT'
           #!/bin/bash
           set -eo pipefail
           cd ~/LocalBiz-Seoul
           git fetch origin dev && git checkout dev && git pull origin dev
           cd backend
 
-          # 시크릿 .env에 병합
-          if [ -f /tmp/secrets.env ]; then
+          # 시크릿 .env에 병합 — 시크릿 파일 경로는 $1 (없으면 레거시 경로)
+          SECRETS_FILE="${1:-/tmp/secrets.env}"
+          if [ -f "$SECRETS_FILE" ]; then
             while IFS= read -r line; do
               [ -z "$line" ] && continue
               key="${line%%=*}"
@@ -79,8 +82,8 @@ jobs:
               else
                 echo "${key}=${value}" >> .env
               fi
-            done < /tmp/secrets.env
-            rm -f /tmp/secrets.env
+            done < "$SECRETS_FILE"
+            rm -f "$SECRETS_FILE"
           fi
 
           # Docker 정리 (디스크 부족 방지) — 미사용 이미지/캐시 제거
@@ -112,7 +115,7 @@ jobs:
           docker compose logs --tail=50 api
           exit 1
           SCRIPT
-          chmod +x /tmp/deploy.sh
+          chmod +x /tmp/deploy-${{ github.run_id }}.sh
         env:
           GOOGLE_CALENDAR_CLIENT_ID: ${{ secrets.GOOGLE_CALENDAR_CLIENT_ID }}
           GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.GOOGLE_CALENDAR_CLIENT_SECRET }}
@@ -122,12 +125,12 @@ jobs:
       # ③ 서버에 전송 + 실행
       - name: Upload and execute deploy
         run: |
-          gcloud compute scp /tmp/secrets.env /tmp/deploy.sh \
+          gcloud compute scp /tmp/secrets-${{ github.run_id }}.env /tmp/deploy-${{ github.run_id }}.sh \
             ijeong@${{ env.GCE_INSTANCE }}:/tmp/ \
             --zone=${{ env.GCE_ZONE }} --project=${{ env.PROJECT_ID }} --quiet
 
-          # 성공/실패 무관하게 임시파일 정리 — '&&'면 실패 시 leftover가 남아
-          # 다음 배포의 scp 덮어쓰기를 막는다(이번 OS Login 사고의 직접 트리거).
+          # 시크릿 경로를 $1로 전달. 성공/실패 무관하게 임시파일 정리 — '&&'면 실패 시
+          # leftover가 남아 다음 배포 scp를 막는다(이번 사고의 직접 트리거).
           gcloud compute ssh ijeong@${{ env.GCE_INSTANCE }} \
             --zone=${{ env.GCE_ZONE }} --project=${{ env.PROJECT_ID }} --quiet \
-            --command="bash /tmp/deploy.sh; rc=\$?; rm -f /tmp/deploy.sh /tmp/secrets.env; exit \$rc"
+            --command="bash /tmp/deploy-${{ github.run_id }}.sh /tmp/secrets-${{ github.run_id }}.env; rc=\$?; rm -f /tmp/deploy-${{ github.run_id }}.sh /tmp/secrets-${{ github.run_id }}.env; exit \$rc"
