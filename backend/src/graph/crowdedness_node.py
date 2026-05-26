@@ -22,133 +22,124 @@ def _classify_level(ratio: float) -> str:
     return "혼잡"
 
 
-async def _resolve_dong_code(
+async def _resolve_dong_codes(
     pool: Any,
-    neighborhood: str,
-    time_slot: int,
+    neighborhood: Optional[str],
     district: Optional[str],
-) -> Optional[tuple[str, str]]:
-    """neighborhood ILIKE 매칭 → district 대표 dong 집계 fallback → None.
+) -> Optional[tuple[list[str], str]]:
+    """통용 지명/자치구를 행정동 코드 리스트 + 표시명으로 해석한다.
+
+    우선순위:
+        1. neighborhood가 통용 지명 매핑(geo_mapping)에 있으면 패턴 ILIKE로 행정동 매칭
+        2. neighborhood가 실제 행정동명 일부와 일치하면 ILIKE 매칭
+        3. 위 두 가지 실패 시 district의 모든 행정동
+        4. neighborhood 없고 district만 있을 때도 district의 모든 행정동
 
     Returns:
-        (adm_dong_code, resolved_area_name) — ILIKE 성공 시 neighborhood,
-        district fallback 시 district. 둘 다 실패 시 None.
+        ([adm_dong_code, ...], 표시명) 또는 None.
+        표시명은 사용자가 물은 단위(neighborhood 또는 district)와 일치.
     """
-    row = await pool.fetchrow(
-        """
-        SELECT a.adm_dong_code
-        FROM administrative_districts a
-        LEFT JOIN (
-            SELECT adm_dong_code, total_pop
-            FROM population_stats
-            WHERE base_date = (SELECT MAX(base_date) FROM population_stats)
-              AND time_slot = $2
-        ) p USING (adm_dong_code)
-        WHERE a.adm_dong_name ILIKE $1
-        ORDER BY p.total_pop DESC NULLS LAST
-        LIMIT 1
-        """,
-        f"%{neighborhood}%",
-        time_slot,
-    )
-    if row:
-        return row["adm_dong_code"], neighborhood
+    from src.utils.geo_mapping import resolve_dong_patterns  # pyright: ignore[reportMissingImports]
 
-    if not district:
-        return None
+    if neighborhood:
+        patterns = resolve_dong_patterns(neighborhood)
+        if patterns:
+            like_patterns = [f"%{p}%" for p in patterns]
+            rows = await pool.fetch(
+                """
+                SELECT adm_dong_code
+                FROM administrative_districts
+                WHERE adm_dong_name ILIKE ANY($1::text[])
+                """,
+                like_patterns,
+            )
+            if rows:
+                return [r["adm_dong_code"] for r in rows], neighborhood
 
-    row2 = await pool.fetchrow(
-        """
-        SELECT a.adm_dong_code
-        FROM administrative_districts a
-        LEFT JOIN (
-            SELECT adm_dong_code, SUM(total_pop) AS sum_pop
-            FROM population_stats
-            WHERE base_date = (SELECT MAX(base_date) FROM population_stats)
-              AND time_slot = $2
-            GROUP BY adm_dong_code
-        ) p USING (adm_dong_code)
-        WHERE a.district = $1
-        ORDER BY p.sum_pop DESC NULLS LAST
-        LIMIT 1
-        """,
-        district,
-        time_slot,
-    )
-    return (row2["adm_dong_code"], district) if row2 else None
+        rows = await pool.fetch(
+            """
+            SELECT adm_dong_code
+            FROM administrative_districts
+            WHERE adm_dong_name ILIKE $1
+            """,
+            f"%{neighborhood}%",
+        )
+        if rows:
+            return [r["adm_dong_code"] for r in rows], neighborhood
+
+        # Gemini 정규화로 "성수" → "성수동" 같은 변형 입력 방어 — 끝 "동" 떼고 재시도.
+        # 실제 동명은 "성수1가1동"이라 "%성수동%"은 0건이지만 "%성수%"는 매치.
+        if neighborhood.endswith("동") and len(neighborhood) > 1:
+            trimmed = neighborhood[:-1]
+            rows = await pool.fetch(
+                """
+                SELECT adm_dong_code
+                FROM administrative_districts
+                WHERE adm_dong_name ILIKE $1
+                """,
+                f"%{trimmed}%",
+            )
+            if rows:
+                return [r["adm_dong_code"] for r in rows], neighborhood
+
+    if district:
+        rows = await pool.fetch(
+            """
+            SELECT adm_dong_code
+            FROM administrative_districts
+            WHERE district = $1
+            """,
+            district,
+        )
+        if rows:
+            return [r["adm_dong_code"] for r in rows], district
+
+    return None
 
 
 async def _fetch_population(
     pool: Any,
-    dong_code: Optional[str],
-    district: Optional[str],
+    dong_codes: list[str],
     time_slot: int,
 ) -> Optional[dict[str, Any]]:
-    """현재 시간대 인구 + 최근 30일 동일 시간대 평균 조회."""
-    if dong_code:
-        row = await pool.fetchrow(
-            """
-            WITH latest AS (SELECT MAX(base_date) AS d FROM population_stats)
-            SELECT
-                cur.total_pop AS current_pop,
-                l.d AS base_date,
-                COALESCE(
-                    (SELECT AVG(p2.total_pop)
+    """주어진 행정동 코드들의 현재 시간대 인구 SUM + 30일 동일 시간대 평균.
+
+    base_date 는 population_stats 의 최신 일자.
+    avg_pop 은 동일 dong 집합·동일 time_slot 의 일자별 SUM의 30일 평균.
+    """
+    if not dong_codes:
+        return None
+
+    row = await pool.fetchrow(
+        """
+        WITH latest AS (SELECT MAX(base_date) AS d FROM population_stats)
+        SELECT
+            COALESCE(SUM(cur.total_pop), 0) AS current_pop,
+            l.d AS base_date,
+            COALESCE(
+                (SELECT AVG(daily_total)
+                 FROM (
+                     SELECT SUM(p2.total_pop) AS daily_total
                      FROM population_stats p2, latest
-                     WHERE p2.adm_dong_code = $1
+                     WHERE p2.adm_dong_code = ANY($1::text[])
                        AND p2.time_slot = $2
-                       AND p2.base_date >= latest.d - INTERVAL '30 days'),
-                    0
-                ) AS avg_pop
-            FROM population_stats cur, latest l
-            WHERE cur.adm_dong_code = $1
-              AND cur.time_slot = $2
-              AND cur.base_date = l.d
-            LIMIT 1
-            """,
-            dong_code,
-            time_slot,
-        )
-        return dict(row) if row else None
-
-    if district:
-        row = await pool.fetchrow(
-            """
-            WITH latest AS (SELECT MAX(base_date) AS d FROM population_stats)
-            SELECT
-                COALESCE(SUM(cur.total_pop), 0) AS current_pop,
-                l.d AS base_date,
-                COALESCE(
-                    (SELECT AVG(daily_total)
-                     FROM (
-                         SELECT SUM(p2.total_pop) AS daily_total
-                         FROM administrative_districts a2
-                         JOIN population_stats p2 ON p2.adm_dong_code = a2.adm_dong_code
-                         CROSS JOIN latest
-                         WHERE a2.district = $1
-                           AND p2.time_slot = $2
-                           AND p2.base_date >= latest.d - INTERVAL '30 days'
-                         GROUP BY p2.base_date
-                     ) dt),
-                    0
-                ) AS avg_pop
-            FROM administrative_districts a
-            LEFT JOIN population_stats cur
-                ON cur.adm_dong_code = a.adm_dong_code
-               AND cur.time_slot = $2
-               AND cur.base_date = (SELECT d FROM latest)
-            CROSS JOIN latest l
-            WHERE a.district = $1
-            GROUP BY l.d
-            """,
-            district,
-            time_slot,
-        )
-        if not row or row["base_date"] is None:
-            return None
-        return dict(row)
-
-    return None
+                       AND p2.base_date >= latest.d - INTERVAL '30 days'
+                     GROUP BY p2.base_date
+                 ) dt),
+                0
+            ) AS avg_pop
+        FROM population_stats cur, latest l
+        WHERE cur.adm_dong_code = ANY($1::text[])
+          AND cur.time_slot = $2
+          AND cur.base_date = l.d
+        GROUP BY l.d
+        """,
+        dong_codes,
+        time_slot,
+    )
+    if not row or row["base_date"] is None:
+        return None
+    return dict(row)
 
 
 def _build_crowdedness_blocks(
@@ -193,7 +184,11 @@ async def fetch_congestion_by_district(
         or None when population data is unavailable.
     """
     time_slot: int = datetime.now(ZoneInfo("Asia/Seoul")).hour
-    pop = await _fetch_population(pool, None, district, time_slot)
+    resolution = await _resolve_dong_codes(pool, None, district)
+    if resolution is None:
+        return None
+    dong_codes, _ = resolution
+    pop = await _fetch_population(pool, dong_codes, time_slot)
     if pop is None:
         return None
     current_pop = int(pop.get("current_pop") or 0)
@@ -233,20 +228,12 @@ async def crowdedness_node(state: dict[str, Any]) -> dict[str, Any]:
     pool = get_pool()
     time_slot: int = datetime.now(ZoneInfo("Asia/Seoul")).hour
 
-    dong_code: Optional[str] = None
-    area_name: str = district or ""  # type: ignore[assignment]
-    if neighborhood:
-        resolution = await _resolve_dong_code(pool, neighborhood, time_slot, district)
-        if resolution is None:
-            return _no_location()
-        dong_code, area_name = resolution
+    resolution = await _resolve_dong_codes(pool, neighborhood, district)
+    if resolution is None:
+        return _no_location()
+    dong_codes, area_name = resolution
 
-    pop = await _fetch_population(
-        pool,
-        dong_code,
-        district if dong_code is None else None,
-        time_slot,
-    )
+    pop = await _fetch_population(pool, dong_codes, time_slot)
 
     if pop is None:
         return {

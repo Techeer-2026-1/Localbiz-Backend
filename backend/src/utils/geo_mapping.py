@@ -1,7 +1,9 @@
-"""동네명 → 자치구 매핑 유틸.
+"""동네명 → 자치구 / 행정동 매핑 유틸.
 
-query_preprocessor, place_search, place_recommend, course_plan 등
-여러 노드에서 공유하는 neighborhood→district 추론 테이블.
+query_preprocessor, place_search, place_recommend, course_plan,
+crowdedness 등 여러 노드에서 공유.
+- NEIGHBORHOOD_TO_DISTRICT: 통용명 → 자치구
+- NEIGHBORHOOD_TO_DONG_PATTERNS: 통용명 → 행정동명 부분일치 패턴 (혼잡도 집계용)
 """
 
 from __future__ import annotations
@@ -119,4 +121,71 @@ def resolve_district(neighborhood: Optional[str]) -> Optional[str]:
     for key, district in NEIGHBORHOOD_TO_DISTRICT.items():
         if key in neighborhood:
             return district
+    return None
+
+
+# 통용명 → 행정동명 부분일치 패턴.
+# administrative_districts.adm_dong_name 에 통용명("홍대")이 그대로 안 나타나는
+# 케이스만 정의. 통용명과 동명이 같은 경우(예: "이태원" → "이태원1동")는
+# ILIKE '%이태원%' 가 자체 처리하므로 생략.
+NEIGHBORHOOD_TO_DONG_PATTERNS: dict[str, list[str]] = {
+    # 마포구
+    "홍대": ["서교", "동교", "연남"],
+    "홍대입구": ["서교", "동교", "연남"],
+    "홍대앞": ["서교", "동교", "연남"],
+    "연트럴파크": ["연남"],
+    # 강남구
+    "강남": ["역삼"],
+    "강남역": ["역삼"],
+    "가로수길": ["신사"],
+    # 용산구
+    "경리단길": ["이태원"],
+    "해방촌": ["용산2"],
+    # 광진구
+    "건대": ["화양"],
+    "건대입구": ["화양"],
+    # 종로구
+    "북촌": ["가회", "삼청"],
+    "서촌": ["청운효자"],
+    "익선동": ["종로1"],
+    "인사동": ["종로1"],
+    "광화문": ["사직"],
+    "경복궁": ["사직"],
+    # 성동구
+    "서울숲": ["성수1가"],
+    # 서대문구
+    "이대": ["대신"],
+    # 관악구
+    "서울대입구": ["행운", "낙성대"],
+    # 강서구
+    "마곡": ["공항"],
+}
+
+
+def resolve_dong_patterns(neighborhood: Optional[str]) -> Optional[list[str]]:
+    """통용 지명을 행정동명 부분일치 패턴 리스트로 변환한다.
+
+    Args:
+        neighborhood: 통용명 (예: "홍대", "강남역")
+
+    Returns:
+        패턴 리스트 (예: ["서교", "동교", "연남"]) 또는 None.
+        반환된 패턴은 SQL `adm_dong_name ILIKE '%pattern%'` 매칭에 사용.
+    """
+    if not neighborhood:
+        return None
+    neighborhood = neighborhood.strip()
+    if not neighborhood:
+        return None
+    # Gemini가 통용명에 "동"을 붙여 정규화하는 케이스 방어 — "성수동" 입력도 "성수"로 lookup.
+    candidates = [neighborhood]
+    if neighborhood.endswith("동") and len(neighborhood) > 1:
+        candidates.append(neighborhood[:-1])
+    for cand in candidates:
+        if cand in NEIGHBORHOOD_TO_DONG_PATTERNS:
+            return NEIGHBORHOOD_TO_DONG_PATTERNS[cand]
+    for key, patterns in NEIGHBORHOOD_TO_DONG_PATTERNS.items():
+        for cand in candidates:
+            if key in cand:
+                return patterns
     return None
