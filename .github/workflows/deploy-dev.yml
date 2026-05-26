@@ -90,6 +90,11 @@ jobs:
           docker system prune -af --filter "until=72h" || true
           docker builder prune -af || true
 
+          # 중복 네트워크 정리 — #159 이전 동시배포 레이스가 동일 이름(backend_default)
+          # 네트워크를 복수 생성 → "network backend_default is ambiguous" 유발.
+          # 컨테이너 미부착 고아 네트워크를 제거(실행 중 pg/os가 쓰는 네트워크는 보존).
+          docker network prune -f || true
+
           # 잔재 컨테이너 강제 정리 (#148) — 이전 deploy가 중간 실패 시 남긴
           # rename 임시 컨테이너(예: <hash>_localbiz-api)와 이름 충돌 방지.
           docker ps -a --format '{{.Names}}' | grep -E '(^|_)localbiz-api$' | xargs -r docker rm -f 2>/dev/null || true
