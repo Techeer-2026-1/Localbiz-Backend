@@ -83,7 +83,6 @@ def _extract_search_term(
 def _build_detail_blocks(
     query: str,
     place_row: Optional[dict[str, Any]],
-    photo_url: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """장소 조회 결과 → text_stream + place 블록 생성.
 
@@ -147,8 +146,6 @@ def _build_detail_blocks(
         place_block["lat"] = place_row["lat"]
     if place_row.get("lng") is not None:
         place_block["lng"] = place_row["lng"]
-    if photo_url:
-        place_block["image_url"] = photo_url
 
     from src.models.blocks import attach_map_urls  # pyright: ignore[reportMissingImports]
 
@@ -207,17 +204,7 @@ async def detail_inquiry_node(state: dict[str, Any]) -> dict[str, Any]:
     pool = get_pool()
     place_row = await _fetch_place(pool, search_term)
 
-    # Google Places 썸네일 (단건) — 키/사진 없으면 None
-    photo_url: Optional[str] = None
-    if place_row is not None:
-        from src.config import get_settings  # pyright: ignore[reportMissingImports]
-        from src.services.place_photo import fetch_image_urls  # pyright: ignore[reportMissingImports]
-
-        pid = str(place_row.get("place_id", ""))
-        photos = await fetch_image_urls(pool, [pid], get_settings().google_places_api_key)
-        photo_url = photos.get(pid)
-
-    blocks = _build_detail_blocks(query, place_row, photo_url)
+    blocks = _build_detail_blocks(query, place_row)
 
     if place_row is not None:
         logger.info("detail_inquiry: found place=%s", place_row.get("name", "")[:50])

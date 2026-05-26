@@ -636,8 +636,6 @@ def _place_to_block(place: dict[str, Any]) -> dict[str, Any]:
         block["lat"] = place["lat"]
     if place.get("lng") is not None:
         block["lng"] = place["lng"]
-    if place.get("image_url"):
-        block["image_url"] = place["image_url"]
     from src.models.blocks import attach_map_urls  # pyright: ignore[reportMissingImports]
 
     attach_map_urls(block)
@@ -727,20 +725,6 @@ async def _run_knn(
                 "장소명을 직접 알려주시면 더 잘 찾아드릴 수 있다고 안내해주세요."
             )
         ]
-
-    # Google Places 썸네일 주입 (키/사진 없으면 무변경)
-    from src.config import get_settings  # pyright: ignore[reportMissingImports]
-    from src.services.place_photo import fetch_image_urls  # pyright: ignore[reportMissingImports]
-
-    photo_urls = await fetch_image_urls(
-        pool,
-        [str(p.get("place_id", "")) for p in places],
-        get_settings().google_places_api_key,
-    )
-    for p in places:
-        url = photo_urls.get(str(p.get("place_id", "")))
-        if url:
-            p["image_url"] = url
 
     result_summary = "\n".join(
         f"- {p.get('name', '')} ({p.get('category', '')}, {p.get('district', '')})" for p in places

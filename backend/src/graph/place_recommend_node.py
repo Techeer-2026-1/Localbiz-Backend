@@ -397,7 +397,6 @@ def _build_blocks(
     results: list[dict[str, Any]],
     reasons: dict[str, str],
     review_data_map: dict[str, dict[str, Any]],
-    photo_urls: Optional[dict[str, str]] = None,
 ) -> list[dict[str, Any]]:
     """places(+summary) + text_stream(종합 요약) + map_markers + references 블록 생성.
 
@@ -430,10 +429,6 @@ def _build_blocks(
         reason = reasons.get(pid)
         if reason:
             item["summary"] = reason
-        # Google Places 썸네일 (있을 때만) — 카드 이미지
-        photo_url = (photo_urls or {}).get(str(pid))
-        if photo_url:
-            item["image_url"] = photo_url
         from src.models.blocks import attach_map_urls  # pyright: ignore[reportMissingImports]
 
         attach_map_urls(item)
@@ -735,19 +730,8 @@ async def place_recommend_node(state: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         logger.warning("congestion fetch skipped")
 
-    # Google Places 썸네일 조회 (키 없거나 사진 없으면 빈 dict)
-    photo_urls: dict[str, str] = {}
-    if reranked:
-        from src.services.place_photo import fetch_image_urls  # pyright: ignore[reportMissingImports]
-
-        photo_urls = await fetch_image_urls(
-            pool,
-            [str(r.get("place_id", "")) for r in reranked],
-            settings.google_places_api_key,
-        )
-
     # ⑥ 블록 생성
-    blocks = _build_blocks(query, reranked, reasons, review_data_map, photo_urls)
+    blocks = _build_blocks(query, reranked, reasons, review_data_map)
 
     logger.info(
         "place_recommend: pg=%d, os_places=%d, os_reviews=%d, merged=%d, final=%d",
