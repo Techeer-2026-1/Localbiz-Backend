@@ -255,6 +255,7 @@ def _build_blocks(
     query: str,
     results: list[dict[str, Any]],
     descriptions: dict[str, str],
+    photo_urls: Optional[dict[str, str]] = None,
 ) -> list[dict[str, Any]]:
     """검색 결과 → places(+summary) + text_stream(종합 요약) + map_markers 블록."""
     blocks: list[dict[str, Any]] = []
@@ -283,6 +284,10 @@ def _build_blocks(
         desc = descriptions.get(r.get("place_id", ""))
         if desc:
             item["summary"] = desc
+        # Google Places 썸네일 (있을 때만) — 카드 이미지
+        photo_url = (photo_urls or {}).get(str(r.get("place_id", "")))
+        if photo_url:
+            item["image_url"] = photo_url
         from src.models.blocks import attach_map_urls  # pyright: ignore[reportMissingImports]
 
         attach_map_urls(item)
@@ -540,8 +545,19 @@ async def place_search_node(state: dict[str, Any]) -> dict[str, Any]:
     if results and settings.gemini_llm_api_key:
         descriptions = await _generate_place_descriptions(results, query, settings.gemini_llm_api_key)
 
+    # Google Places 썸네일 조회 (키 없거나 사진 없으면 빈 dict, 카드는 정상 표시)
+    photo_urls: dict[str, str] = {}
+    if results:
+        from src.services.place_photo import fetch_image_urls  # pyright: ignore[reportMissingImports]
+
+        photo_urls = await fetch_image_urls(
+            pool,
+            [str(r.get("place_id", "")) for r in results],
+            settings.google_places_api_key,
+        )
+
     # 블록 생성
-    blocks = _build_blocks(query, results, descriptions)
+    blocks = _build_blocks(query, results, descriptions, photo_urls)
 
     logger.info("place_search: pg=%d, os=%d, merged=%d", len(pg_results), len(os_results), len(results))
 
