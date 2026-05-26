@@ -109,6 +109,15 @@ Phase 1 (active):
 Phase 2 (not yet active, classify as GENERAL for now):
 - ANALYSIS: analyzing a single place with 6 metrics (satisfaction/accessibility/cleanliness/value/atmosphere/expertise)
 
+SEARCH vs RECOMMEND (important):
+- Use PLACE_SEARCH / EVENT_SEARCH when the user looks something up with concrete criteria
+  already in mind — a location, a category, a name, or verbs like "찾아줘", "알려줘", "있어?",
+  "어디야", "보여줘". Example: "강남 맛집 찾아줘", "주말 전시회 알려줘" → *_SEARCH.
+- Use PLACE_RECOMMEND / EVENT_RECOMMEND ONLY when the user explicitly asks for a suggestion and
+  leaves the choice open — "추천", "추천해줘", "갈 만한 곳", "괜찮은 데", "뭐가 좋아?".
+  Example: "홍대 카페 추천해줘" → PLACE_RECOMMEND.
+- When ambiguous between SEARCH and RECOMMEND, prefer SEARCH.
+
 Respond in JSON: {"intent": "INTENT_NAME", "confidence": 0.0-1.0}
 """
 
@@ -135,6 +144,15 @@ Phase 1 (active):
 
 Phase 2 (not yet active, classify as GENERAL for now):
 - ANALYSIS: analyzing a single place with 6 metrics (satisfaction/accessibility/cleanliness/value/atmosphere/expertise)
+
+SEARCH vs RECOMMEND (important):
+- Use PLACE_SEARCH / EVENT_SEARCH when the user looks something up with concrete criteria
+  already in mind — a location, a category, a name, or verbs like "찾아줘", "알려줘", "있어?",
+  "어디야", "보여줘". Example: "강남 맛집 찾아줘", "주말 전시회 알려줘" → *_SEARCH.
+- Use PLACE_RECOMMEND / EVENT_RECOMMEND ONLY when the user explicitly asks for a suggestion and
+  leaves the choice open — "추천", "추천해줘", "갈 만한 곳", "괜찮은 데", "뭐가 좋아?".
+  Example: "홍대 카페 추천해줘" → PLACE_RECOMMEND.
+- When ambiguous between SEARCH and RECOMMEND, prefer SEARCH.
 
 Rules:
 - If the query has ONE purpose, return ONE intent. Example: "카페에서 전시회 가는 코스" → COURSE_PLAN only.
