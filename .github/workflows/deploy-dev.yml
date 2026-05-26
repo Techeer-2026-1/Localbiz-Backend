@@ -36,6 +36,17 @@ jobs:
       - name: Setup gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
 
+      # ①-b OS Login 비활성화 — 이 배포는 ijeong 홈(~/LocalBiz-Seoul)에서 git pull + docker compose 한다.
+      # 프로젝트에 OS Login이 켜지면 배포 SA가 sa_<id> 유저로 매핑되어
+      #   (1) ijeong 소유 /tmp/deploy.sh 덮어쓰기 불가 → scp Permission denied,
+      #   (2) ~/LocalBiz-Seoul 접근·쓰기 불가로 배포가 깨진다.
+      # 인스턴스 메타데이터로 OS Login을 끄면 gcloud가 ijeong SSH 키를 주입해 기존(정상) 경로로 복귀.
+      - name: Disable OS Login on instance
+        run: |
+          gcloud compute instances add-metadata ${{ env.GCE_INSTANCE }} \
+            --zone=${{ env.GCE_ZONE }} --project=${{ env.PROJECT_ID }} \
+            --metadata enable-oslogin=FALSE --quiet
+
       # ② 배포 파일 준비 (runner에서 시크릿 치환)
       - name: Prepare deploy files
         run: |
@@ -115,6 +126,8 @@ jobs:
             ijeong@${{ env.GCE_INSTANCE }}:/tmp/ \
             --zone=${{ env.GCE_ZONE }} --project=${{ env.PROJECT_ID }} --quiet
 
+          # 성공/실패 무관하게 임시파일 정리 — '&&'면 실패 시 leftover가 남아
+          # 다음 배포의 scp 덮어쓰기를 막는다(이번 OS Login 사고의 직접 트리거).
           gcloud compute ssh ijeong@${{ env.GCE_INSTANCE }} \
             --zone=${{ env.GCE_ZONE }} --project=${{ env.PROJECT_ID }} --quiet \
-            --command="bash /tmp/deploy.sh && rm -f /tmp/deploy.sh"
+            --command="bash /tmp/deploy.sh; rc=\$?; rm -f /tmp/deploy.sh /tmp/secrets.env; exit \$rc"
