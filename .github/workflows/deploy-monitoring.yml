@@ -1,0 +1,71 @@
+name: Deploy Monitoring to GCE (dev)
+
+# 모니터링 스택(Prometheus/Grafana/Loki/Jaeger)은 API VM과 별도인 localbiz-monitoring
+# VM에서 docker-compose.monitoring.yml로 동작한다. deploy-dev.yml은 API VM만 갱신하므로
+# monitoring/ 설정 변경(prometheus.yml, grafana 대시보드/프로비저닝, compose)이 반영되지
+# 않는 문제가 있었다(수동 git pull 필요). 이 워크플로가 그 경로를 자동화한다.
+#
+# 전제조건(첫 실행 전 1회 확인):
+#  - 배포 SA(github-deploy)가 SSH 후 localbiz-monitoring에서 passwordless sudo 가능해야 함
+#    (현 스택은 root 소유 docker + 팀원 홈 repo라 sudo 필수).
+#  - 모니터링 repo 경로 REPO_DIR가 실제 컨테이너 bind-mount 경로와 일치해야 함
+#    (컨테이너가 마운트하는 경로를 갱신해야 효과 발생). 아래 docker inspect로 확인:
+#      sudo docker inspect localbiz-grafana --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}'
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'backend/monitoring/**'
+  workflow_dispatch:  # 수동 트리거 허용(설정 변경 없이 재배포 시)
+
+permissions:
+  contents: read
+  id-token: write  # WIF OIDC
+
+concurrency:
+  group: deploy-monitoring
+  cancel-in-progress: false
+
+env:
+  GCE_INSTANCE: localbiz-monitoring
+  GCE_ZONE: asia-northeast3-a
+  PROJECT_ID: project-e9a9c8f2-70da-411d-a51
+  WIF_PROVIDER: projects/124882044304/locations/global/workloadIdentityPools/github-actions/providers/github-repo
+  SA_EMAIL: github-deploy@project-e9a9c8f2-70da-411d-a51.iam.gserviceaccount.com
+  # 모니터링 스택이 배치된 repo 경로(컨테이너 bind-mount 기준). 변경 시 여기만 수정.
+  REPO_DIR: /home/rkdalstj0417_gmail_com/LocalBiz-Seoul
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.SA_EMAIL }}
+
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Pull config & recreate monitoring stack
+        run: |
+          gcloud compute ssh ${{ env.GCE_INSTANCE }} \
+            --zone=${{ env.GCE_ZONE }} --project=${{ env.PROJECT_ID }} --quiet \
+            --command='
+              set -eo pipefail
+              REPO="'"${REPO_DIR}"'"
+              M="$REPO/backend/monitoring"
+              # 다른 유저 소유 repo라 sudo + safe.directory 필요.
+              sudo git config --global --add safe.directory "$REPO"
+              sudo git -C "$REPO" fetch origin dev
+              sudo git -C "$REPO" checkout dev
+              sudo git -C "$REPO" pull origin dev
+              # 프로젝트명 monitoring 고정 — named volume(monitoring_*) 보존.
+              sudo docker compose -p monitoring --project-directory "$M" \
+                -f "$M/docker-compose.monitoring.yml" up -d --force-recreate
+              # 검증: prometheus 타깃 health (재기동 직후 unknown → 곧 up)
+              sleep 12
+              curl -sf http://localhost:9091/api/v1/targets >/dev/null && echo "prometheus reachable" || echo "WARN: prometheus targets API 응답 없음"
+            '
