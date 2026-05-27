@@ -33,7 +33,12 @@ import re
 from datetime import date
 from typing import Any, Optional
 
+from opentelemetry import trace  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
+
+# tracer는 JAEGER_HOST 미설정 환경(로컬·테스트)에서도 no-op으로 동작 — telemetry.py 활성 시 자동으로 export.
+tracer = trace.get_tracer(__name__)
 
 _EVENT_SEARCH_SYSTEM_PROMPT = (
     "당신은 서울 로컬 라이프 AI 챗봇 'AnyWay'입니다. "
@@ -86,20 +91,24 @@ async def _embed_query_768d(query: str, api_key: str) -> list[float]:
     """Gemini embedding-001 768d 단건 임베딩. 불변식 #7."""
     from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
-    body = {
-        "model": "models/gemini-embedding-001",
-        "content": {"parts": [{"text": query[:2000]}]},
-        "outputDimensionality": 768,
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": api_key,
-    }
+    with tracer.start_as_current_span("event.search.embed_query") as span:
+        span.set_attribute("event.embed.model", "gemini-embedding-001")
+        span.set_attribute("event.embed.query_length", len(query))
 
-    data = await request_json("POST", url, json=body, headers=headers, timeout=10)
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
+        body = {
+            "model": "models/gemini-embedding-001",
+            "content": {"parts": [{"text": query[:2000]}]},
+            "outputDimensionality": 768,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        }
 
-    return data.get("embedding", {}).get("values", [0.0] * 768)
+        data = await request_json("POST", url, json=body, headers=headers, timeout=10)
+
+        return data.get("embedding", {}).get("values", [0.0] * 768)
 
 
 # ---------------------------------------------------------------------------
@@ -132,75 +141,84 @@ async def _search_os_events(
     from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
 
     try:
-        query_vector = await _embed_query_768d(query, api_key)
+        with tracer.start_as_current_span("event.search.opensearch") as span:
+            span.set_attribute("event.os.index", "events_vector")
+            span.set_attribute("event.os.k", _OS_CANDIDATE_K)
+            span.set_attribute("event.os.min_score", _OS_MIN_SCORE)
 
-        # zero-vector 가드: 임베딩 API 실패 시 k-NN이 무의미한 순위를 내므로 skip
-        if not any(query_vector):
-            logger.warning("events_vector search skipped: zero embedding vector")
-            return []
+            query_vector = await _embed_query_768d(query, api_key)
 
-        body: dict[str, Any] = {
-            "size": _OS_CANDIDATE_K,
-            "query": {
-                "knn": {
-                    "embedding": {
-                        "vector": query_vector,
-                        "k": _OS_CANDIDATE_K,
+            # zero-vector 가드: 임베딩 API 실패 시 k-NN이 무의미한 순위를 내므로 skip
+            if not any(query_vector):
+                logger.warning("events_vector search skipped: zero embedding vector")
+                span.set_attribute("event.os.result_count", 0)
+                span.set_attribute("event.os.skipped", "zero_embedding")
+                return []
+
+            body: dict[str, Any] = {
+                "size": _OS_CANDIDATE_K,
+                "query": {
+                    "knn": {
+                        "embedding": {
+                            "vector": query_vector,
+                            "k": _OS_CANDIDATE_K,
+                        }
                     }
-                }
-            },
-            "min_score": _OS_MIN_SCORE,
-            "_source": [
-                "event_id",
-                "title",
-                "category",
-                "district",
-                "date_start",
-                "date_end",
-                "source",
-            ],
-        }
+                },
+                "min_score": _OS_MIN_SCORE,
+                "_source": [
+                    "event_id",
+                    "title",
+                    "category",
+                    "district",
+                    "date_start",
+                    "date_end",
+                    "source",
+                ],
+            }
 
-        result = await retry_call(lambda: os_client.search(index="events_vector", body=body), attempts=3)
-        hits = result.get("hits", {}).get("hits", [])
+            result = await retry_call(lambda: os_client.search(index="events_vector", body=body), attempts=3)
+            hits = result.get("hits", {}).get("hits", [])
+            span.set_attribute("event.os.hits_pre_filter", len(hits))
 
-        events: list[dict[str, Any]] = []
-        for hit in hits:
-            source = hit.get("_source", {})
+            events: list[dict[str, Any]] = []
+            for hit in hits:
+                source = hit.get("_source", {})
 
-            # date post-filter — _search_pg overlap 조건 mirror (date 앞 10자 사전식 비교)
-            date_end = source.get("date_end")
-            date_start = source.get("date_start")
-            de = str(date_end)[:10] if date_end else ""
-            ds = str(date_start)[:10] if date_start else ""
+                # date post-filter — _search_pg overlap 조건 mirror (date 앞 10자 사전식 비교)
+                date_end = source.get("date_end")
+                date_start = source.get("date_start")
+                de = str(date_end)[:10] if date_end else ""
+                ds = str(date_start)[:10] if date_start else ""
 
-            if date_start_resolved and date_end_resolved:
-                # overlap: date_end >= start AND date_start <= end (NULL date는 제외)
-                if not de or de < date_start_resolved[:10]:
-                    continue
-                if not ds or ds > date_end_resolved[:10]:
-                    continue
-            else:
-                # resolved date 없을 때: 미종료 행사만 (date_end >= today)
-                if not de or de < today_iso:
-                    continue
+                if date_start_resolved and date_end_resolved:
+                    # overlap: date_end >= start AND date_start <= end (NULL date는 제외)
+                    if not de or de < date_start_resolved[:10]:
+                        continue
+                    if not ds or ds > date_end_resolved[:10]:
+                        continue
+                else:
+                    # resolved date 없을 때: 미종료 행사만 (date_end >= today)
+                    if not de or de < today_iso:
+                        continue
 
-            events.append(
-                {
-                    "event_id": hit.get("_id", "") or source.get("event_id", ""),
-                    "title": source.get("title", ""),
-                    "category": source.get("category", ""),
-                    "district": source.get("district", ""),
-                    "date_start": source.get("date_start"),
-                    "date_end": source.get("date_end"),
-                    "source": source.get("source", ""),
-                    "score": hit.get("_score", 0),
-                }
-            )
-            if len(events) >= _OS_TOP_K:
-                break
+                events.append(
+                    {
+                        "event_id": hit.get("_id", "") or source.get("event_id", ""),
+                        "title": source.get("title", ""),
+                        "category": source.get("category", ""),
+                        "district": source.get("district", ""),
+                        "date_start": source.get("date_start"),
+                        "date_end": source.get("date_end"),
+                        "source": source.get("source", ""),
+                        "score": hit.get("_score", 0),
+                    }
+                )
+                if len(events) >= _OS_TOP_K:
+                    break
 
-        return events
+            span.set_attribute("event.os.result_count", len(events))
+            return events
 
     except Exception:
         logger.exception("OS events_vector search failed")
@@ -278,8 +296,14 @@ async def _search_pg(
     sql = sql + " ORDER BY date_start ASC LIMIT $" + str(len(params))
 
     try:
-        rows = await pool.fetch(sql, *params)
-        return [dict(r) for r in rows]
+        with tracer.start_as_current_span("event.search.postgres") as span:
+            span.set_attribute("event.pg.filter_district", district or "")
+            span.set_attribute("event.pg.filter_category", category or "")
+            span.set_attribute("event.pg.filter_keyword_count", len(keywords))
+            span.set_attribute("event.pg.has_date_range", bool(date_start_resolved and date_end_resolved))
+            rows = await pool.fetch(sql, *params)
+            span.set_attribute("event.pg.result_count", len(rows))
+            return [dict(r) for r in rows]
     except Exception:
         logger.exception("PG event search failed")
         return []
@@ -323,8 +347,13 @@ async def _search_naver(
     }
 
     try:
-        data = await request_json("GET", _NAVER_BLOG_URL, headers=headers, params=params, timeout=_NAVER_TIMEOUT)
-        return list(data.get("items", []))
+        with tracer.start_as_current_span("event.search.naver_fallback") as span:
+            span.set_attribute("event.naver.display", _NAVER_DISPLAY)
+            span.set_attribute("event.naver.query_length", len(query))
+            data = await request_json("GET", _NAVER_BLOG_URL, headers=headers, params=params, timeout=_NAVER_TIMEOUT)
+            items = list(data.get("items", []))
+            span.set_attribute("event.naver.result_count", len(items))
+            return items
     except Exception:
         logger.exception("naver event search failed (graceful degradation)")
         return []
@@ -394,14 +423,17 @@ async def _merge_candidates(
 
     if os_ids:
         try:
-            rows = await pool.fetch(
-                "SELECT event_id, title, category, place_name, address, district, "
-                "ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lng, "
-                "date_start, date_end, price, poster_url, detail_url, summary, source "
-                "FROM events WHERE event_id = ANY($1::varchar[]) AND is_deleted = FALSE",
-                os_ids,
-            )
-            enriched_map = {str(r["event_id"]): dict(r) for r in rows}
+            with tracer.start_as_current_span("event.search.merge.pg_enrich") as span:
+                span.set_attribute("event.merge.os_ids_count", len(os_ids))
+                rows = await pool.fetch(
+                    "SELECT event_id, title, category, place_name, address, district, "
+                    "ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lng, "
+                    "date_start, date_end, price, poster_url, detail_url, summary, source "
+                    "FROM events WHERE event_id = ANY($1::varchar[]) AND is_deleted = FALSE",
+                    os_ids,
+                )
+                enriched_map = {str(r["event_id"]): dict(r) for r in rows}
+                span.set_attribute("event.merge.enriched_count", len(enriched_map))
         except Exception:
             logger.exception("PG 2차 보강 조회 실패 (graceful degradation)")
 
@@ -467,50 +499,55 @@ async def _llm_rerank(
     user_prompt = f"사용자 조건: {query}\n키워드: {', '.join(keywords)}\n\n후보 행사:\n" + "\n".join(candidate_lines)
 
     try:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=settings.gemini_llm_api_key,
-            temperature=0,
-        )
+        with tracer.start_as_current_span("event.search.llm_rerank") as span:
+            span.set_attribute("event.llm.model", "gemini-2.5-flash")
+            span.set_attribute("event.llm.candidates", len(candidates))
+            llm = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",
+                google_api_key=settings.gemini_llm_api_key,
+                temperature=0,
+            )
 
-        response = await retry_call(
-            lambda: llm.ainvoke(
-                [
-                    ("system", _RERANK_SYSTEM_PROMPT),
-                    ("human", user_prompt),
-                ]
-            ),
-            attempts=3,
-        )
-        text = str(response.content).strip()
+            response = await retry_call(
+                lambda: llm.ainvoke(
+                    [
+                        ("system", _RERANK_SYSTEM_PROMPT),
+                        ("human", user_prompt),
+                    ]
+                ),
+                attempts=3,
+            )
+            text = str(response.content).strip()
+            span.set_attribute("event.llm.response_length", len(text))
 
-        # parse_llm_json: 코드펜스 제거 + json.loads
-        result = parse_llm_json(text)
-        ranked_indices: list[Any] = result.get("ranked_indices", [])
-        reasons: dict[str, str] = result.get("reasons", {})
+            # parse_llm_json: 코드펜스 제거 + json.loads
+            result = parse_llm_json(text)
+            ranked_indices: list[Any] = result.get("ranked_indices", [])
+            reasons: dict[str, str] = result.get("reasons", {})
 
-        reranked: list[dict[str, Any]] = []
-        descriptions: list[str] = []
-        used: set[int] = set()
+            reranked: list[dict[str, Any]] = []
+            descriptions: list[str] = []
+            used: set[int] = set()
 
-        # ranked_indices 순서로 재배치
-        for idx in ranked_indices:
-            if isinstance(idx, int) and 0 <= idx < len(candidates) and idx not in used:
-                used.add(idx)
-                reranked.append(candidates[idx])
-                descriptions.append(reasons.get(str(idx), ""))
-                if len(reranked) >= _MAX_RESULTS:
-                    break
+            # ranked_indices 순서로 재배치
+            for idx in ranked_indices:
+                if isinstance(idx, int) and 0 <= idx < len(candidates) and idx not in used:
+                    used.add(idx)
+                    reranked.append(candidates[idx])
+                    descriptions.append(reasons.get(str(idx), ""))
+                    if len(reranked) >= _MAX_RESULTS:
+                        break
 
-        # ranked_indices에 없는 후보도 원본 순서로 채움
-        if len(reranked) < _MAX_RESULTS:
-            for i, c in enumerate(candidates):
-                if i not in used and len(reranked) < _MAX_RESULTS:
-                    used.add(i)
-                    reranked.append(c)
-                    descriptions.append(reasons.get(str(i), ""))
+            # ranked_indices에 없는 후보도 원본 순서로 채움
+            if len(reranked) < _MAX_RESULTS:
+                for i, c in enumerate(candidates):
+                    if i not in used and len(reranked) < _MAX_RESULTS:
+                        used.add(i)
+                        reranked.append(c)
+                        descriptions.append(reasons.get(str(i), ""))
 
-        return reranked, descriptions
+            span.set_attribute("event.llm.final", len(reranked))
+            return reranked, descriptions
 
     except Exception:
         logger.exception("LLM rerank failed → fallback to original order")
