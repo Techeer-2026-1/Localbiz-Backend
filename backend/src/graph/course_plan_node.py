@@ -76,25 +76,26 @@ async def _embed_query_768d(query: str, api_key: str) -> list[float]:
 # ---------------------------------------------------------------------------
 _KNOWN_CATEGORIES = ["카페", "맛집", "음식점", "술집", "주점", "관광지", "공원", "쇼핑", "문화시설"]
 
-# 상황 키워드 → 카테고리 조합 매핑 (#175).
-# "데이트코스 짜줘"처럼 명시적 카테고리가 없는 상황어를 카테고리 다양화로 해석.
-# 동일 카테고리 5개만 나오던 회귀(예: 홍대역 5개) 회피의 핵심 룰.
-_SITUATION_CATEGORIES: dict[str, list[str]] = {
-    "데이트": ["카페", "맛집", "공원"],
-    "데이트코스": ["카페", "맛집", "공원"],
-    "여행": ["관광지", "맛집", "쇼핑"],
+# 상황 키워드 → 시간대별 카테고리 시퀀스 매핑 (#175, #177).
+# 데이트의 자연스러운 흐름 (점심 → 산책 → 디저트 → 팝업 → 저녁)을 stop 순서로 반영.
+# 길이 2+ 시퀀스는 _pick_by_sequence가 카테고리별 1개씩 시퀀스 순서로 선택 — Greedy NN 대체.
+_SITUATION_SEQUENCES: dict[str, list[str]] = {
+    "데이트": ["음식점", "공원", "카페", "쇼핑", "술집"],
+    "데이트코스": ["음식점", "공원", "카페", "쇼핑", "술집"],
+    "여행": ["관광지", "맛집", "카페", "쇼핑"],
     "관광": ["관광지", "맛집", "카페"],
-    "가족": ["맛집", "공원", "문화시설"],
-    "친구": ["카페", "맛집", "술집"],
-    "혼자": ["카페", "맛집", "문화시설"],
+    "가족": ["맛집", "공원", "문화시설", "카페"],
+    "친구": ["카페", "음식점", "술집"],
+    "혼자": ["카페", "문화시설", "음식점"],
 }
 
 
 def _parse_categories(query: str, pq_category: Optional[str]) -> list[str]:
     """쿼리에서 복수 카테고리 추출. "카페+맛집" → ["카페", "맛집"].
 
-    상황 키워드("데이트", "여행" 등)는 _SITUATION_CATEGORIES 매핑으로 다중 카테고리로 변환.
+    상황 키워드("데이트", "여행" 등)는 _SITUATION_SEQUENCES 매핑으로 시간대별 시퀀스로 변환.
     명시적 카테고리(_KNOWN_CATEGORIES)가 함께 있으면 그것을 우선.
+    반환 list는 시퀀스 순서 그대로 — 코스 stop 순서에 사용됨 (#177).
     """
     categories: list[str] = []
 
@@ -114,10 +115,10 @@ def _parse_categories(query: str, pq_category: Optional[str]) -> list[str]:
             if keyword in query and keyword not in categories:
                 categories.append(keyword)
 
-    # 명시적 카테고리가 안 잡혔으면 상황 키워드 매핑 시도 (#175).
-    # "데이트코스", "여행" 같은 상황어 → 카테고리 조합으로 다양화.
+    # 명시적 카테고리가 안 잡혔으면 상황 키워드 매핑 시도 (#175/#177).
+    # 매칭된 시퀀스를 그대로 사용 — 시간대별 흐름이 stop 순서에 반영됨.
     if not categories:
-        for situation, mapped in _SITUATION_CATEGORIES.items():
+        for situation, mapped in _SITUATION_SEQUENCES.items():
             if situation in query:
                 categories = list(mapped)
                 break
@@ -128,7 +129,7 @@ def _parse_categories(query: str, pq_category: Optional[str]) -> list[str]:
     if not categories:
         categories = ["맛집"]
 
-    return categories[:3]  # 최대 3 카테고리
+    return categories[:_MAX_STOPS]  # 최대 stop 개수까지 — 시퀀스 매칭 시 전체 시퀀스 보존
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +293,12 @@ _COURSE_EXCLUDE_NAMES = [
     "터미널",
     "공항",
     "정류장",
+    # 교차로·도로 결절점 — 코스 stop 부적합 (#177)
+    "사거리",
+    "삼거리",
+    "교차로",
+    "로터리",
+    "오거리",
 ]
 
 # 이름 끝 글자 매칭으로 제외할 패턴 (#175). "역" 같은 1자 substring은 "역삼동" 등에 오탐 — endswith로 안전 처리.
@@ -417,6 +424,57 @@ def _greedy_nn_route(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         route.append(c)
 
     return route
+
+
+def _pick_by_sequence(
+    candidates: list[dict[str, Any]],
+    sequence: list[str],
+    max_stops: int = _MAX_STOPS,
+) -> list[dict[str, Any]]:
+    """시퀀스 순서대로 각 카테고리에서 LLM rerank 최상위 후보 1개씩 선택 (#177).
+
+    데이트의 자연 흐름(점심 → 산책 → 디저트 → 팝업 → 저녁)을 stop 순서로 강제.
+    `candidates`는 _llm_rerank_candidates로 이미 정렬된 상태를 가정 — 앞에서부터 최상위.
+
+    동작:
+      - sequence 각 카테고리마다 candidates를 앞에서부터 스캔, 첫 매칭(category substring 포함)을 picked
+      - 후보 없는 카테고리는 skip — 시퀀스가 깨지지 않게 빈자리는 잔여 candidates로 채움
+      - place_id 기준 중복 제거 (이미 _search_by_categories에서 제거되지만 안전망)
+
+    Returns:
+        max_stops 이하의 stop list (시퀀스 순서 우선, 부족분은 잔여로 채움).
+    """
+    picked: list[dict[str, Any]] = []
+    seen_pids: set[str] = set()
+
+    for cat in sequence:
+        if len(picked) >= max_stops:
+            break
+        for c in candidates:
+            pid = str(c.get("place_id") or "")
+            if pid and pid in seen_pids:
+                continue
+            c_cat = c.get("category") or ""
+            # 부분 일치 — "음식점" 시퀀스 카테고리에 "한식음식점" 같은 세분 카테고리도 매칭.
+            if cat in c_cat:
+                picked.append(c)
+                if pid:
+                    seen_pids.add(pid)
+                break
+
+    # 시퀀스로 못 채운 슬롯은 잔여 candidates로 안전망 (LLM rerank 순서 유지).
+    if len(picked) < max_stops:
+        for c in candidates:
+            if len(picked) >= max_stops:
+                break
+            pid = str(c.get("place_id") or "")
+            if pid and pid in seen_pids:
+                continue
+            picked.append(c)
+            if pid:
+                seen_pids.add(pid)
+
+    return picked[:max_stops]
 
 
 # ---------------------------------------------------------------------------
@@ -1040,8 +1098,13 @@ async def course_plan_node(state: dict[str, Any]) -> dict[str, Any]:
     # 안전망: LLM이 제외 대상을 포함시킨 경우 다시 제거
     candidates = [c for c in candidates if not _is_excluded_place_name(c.get("name") or "")]
 
-    # ③ Greedy NN 경로 최적화
-    route = _greedy_nn_route(candidates)
+    # ③ 코스 순서 결정 — 다중 카테고리(시퀀스) vs 단일 카테고리(거리)
+    # 다중 카테고리: _pick_by_sequence로 시간대별 흐름 강제 (점심·산책·디저트·팝업·저녁 #177)
+    # 단일 카테고리("성수 카페 코스" 등): 기존 Greedy NN으로 거리 기반 정렬 — 회귀 없음
+    if len(categories) >= 2:
+        route = _pick_by_sequence(candidates, categories)
+    else:
+        route = _greedy_nn_route(candidates)
 
     # ④ LLM 코스 구성
     title, description, stop_details = await _llm_course_compose(route, query)
