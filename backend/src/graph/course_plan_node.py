@@ -299,12 +299,16 @@ _COURSE_EXCLUDE_NAME_SUFFIXES: tuple[str, ...] = ("역",)
 
 
 def _is_excluded_place_name(name: str) -> bool:
-    """코스 stop으로 부적합한 장소명 필터링. substring 패턴 + 끝 글자 패턴."""
-    if not name:
+    """코스 stop으로 부적합한 장소명 필터링. substring 패턴 + 끝 글자 패턴.
+
+    `name` 양끝 공백을 정규화 후 매칭 — "홍대역 " 같은 trailing space로 endswith 우회 방지.
+    """
+    normalized = (name or "").strip()
+    if not normalized:
         return False
-    if any(ex in name for ex in _COURSE_EXCLUDE_NAMES):
+    if any(ex in normalized for ex in _COURSE_EXCLUDE_NAMES):
         return True
-    if name.endswith(_COURSE_EXCLUDE_NAME_SUFFIXES):
+    if normalized.endswith(_COURSE_EXCLUDE_NAME_SUFFIXES):
         return True
     return False
 

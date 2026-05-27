@@ -147,6 +147,16 @@ async def test_excluded_place_name_no_false_positive_yeoksam() -> None:
     assert _is_excluded_place_name("") is False
 
 
+async def test_excluded_place_name_normalizes_whitespace() -> None:
+    """trailing/leading whitespace로 endswith 우회 방지 — CodeRabbit fix (#175)."""
+    from src.graph.course_plan_node import _is_excluded_place_name  # pyright: ignore[reportMissingImports]
+
+    assert _is_excluded_place_name("홍대역 ") is True  # trailing space
+    assert _is_excluded_place_name(" 홍대역") is True  # leading space
+    assert _is_excluded_place_name("  강남역  ") is True  # 양쪽
+    assert _is_excluded_place_name("   ") is False  # 공백만
+
+
 # ---------------------------------------------------------------------------
 # _haversine_m 테스트
 # ---------------------------------------------------------------------------
