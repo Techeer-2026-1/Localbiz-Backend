@@ -59,11 +59,11 @@ async def test_parse_categories_plus() -> None:
     assert "맛집" in result
 
 
-async def test_parse_categories_single() -> None:
-    """단일 카테고리 — processed_query에서 가져옴."""
+async def test_parse_categories_single_pq_fallback() -> None:
+    """명시적 카테고리·상황 키워드 모두 없으면 pq_category 단일 사용."""
     from src.graph.course_plan_node import _parse_categories  # pyright: ignore[reportMissingImports]
 
-    result = _parse_categories("강남 데이트 코스", "카페")
+    result = _parse_categories("강남 코스", "카페")
     assert result == ["카페"]
 
 
@@ -73,6 +73,88 @@ async def test_parse_categories_fallback() -> None:
 
     result = _parse_categories("좋은 곳 추천", None)
     assert result == ["맛집"]
+
+
+# ---------------------------------------------------------------------------
+# #175 상황 키워드 → 카테고리 조합 매핑
+# ---------------------------------------------------------------------------
+async def test_parse_categories_situation_date() -> None:
+    """'데이트코스' 상황 키워드 → 카페·맛집·공원 다중 카테고리 (#175 회귀 회피)."""
+    from src.graph.course_plan_node import _parse_categories  # pyright: ignore[reportMissingImports]
+
+    result = _parse_categories("이번주 토요일 홍대 데이트코스 짜줘", None)
+    assert result == ["카페", "맛집", "공원"]
+
+
+async def test_parse_categories_situation_overrides_pq_category() -> None:
+    """상황 키워드가 pq_category(단일)보다 우선 — 데이트 의도면 다양화 (#175)."""
+    from src.graph.course_plan_node import _parse_categories  # pyright: ignore[reportMissingImports]
+
+    result = _parse_categories("강남 데이트 코스", "카페")
+    assert result == ["카페", "맛집", "공원"]
+
+
+async def test_parse_categories_explicit_category_wins_over_situation() -> None:
+    """쿼리에 명시적 카테고리가 있으면 상황 키워드보다 우선."""
+    from src.graph.course_plan_node import _parse_categories  # pyright: ignore[reportMissingImports]
+
+    # "데이트"가 있어도 명시적 "카페"가 있으면 단일 카테고리 사용
+    result = _parse_categories("홍대 카페 데이트 코스", None)
+    assert "카페" in result
+    # 상황 매핑 ["카페","맛집","공원"] 전체로 확장되지 않고 명시 카테고리만
+    assert result == ["카페"]
+
+
+async def test_parse_categories_situation_travel() -> None:
+    """'여행' 상황 키워드 → 관광지·맛집·쇼핑."""
+    from src.graph.course_plan_node import _parse_categories  # pyright: ignore[reportMissingImports]
+
+    result = _parse_categories("부산 여행 코스 추천", None)
+    assert result == ["관광지", "맛집", "쇼핑"]
+
+
+# ---------------------------------------------------------------------------
+# #175 _is_excluded_place_name — 교통결절점 제외 (오탐 회피 포함)
+# ---------------------------------------------------------------------------
+async def test_excluded_place_name_station_suffix() -> None:
+    """'홍대역' 같은 역 끝 이름은 코스 stop으로 제외 (#175)."""
+    from src.graph.course_plan_node import _is_excluded_place_name  # pyright: ignore[reportMissingImports]
+
+    assert _is_excluded_place_name("홍대역") is True
+    assert _is_excluded_place_name("강남역") is True
+    assert _is_excluded_place_name("압구정로데오역") is True
+
+
+async def test_excluded_place_name_substring_terminal() -> None:
+    """터미널·정류장·공항은 substring 매칭으로 제외."""
+    from src.graph.course_plan_node import _is_excluded_place_name  # pyright: ignore[reportMissingImports]
+
+    assert _is_excluded_place_name("강남고속버스터미널") is True
+    assert _is_excluded_place_name("홍대 버스정류장") is True
+    assert _is_excluded_place_name("김포공항 라운지") is True
+
+
+async def test_excluded_place_name_no_false_positive_yeoksam() -> None:
+    """'역삼동'·'역사' 같은 단어가 끼어도 substring 오탐 없어야 함 (#175)."""
+    from src.graph.course_plan_node import _is_excluded_place_name  # pyright: ignore[reportMissingImports]
+
+    # endswith("역") 체크라 "역삼" 끝남 → False
+    assert _is_excluded_place_name("역삼맛집") is False
+    # "역사관" — 끝이 "관"이라 False
+    assert _is_excluded_place_name("서울역사박물관") is False
+    # 일반 음식점·카페는 그대로
+    assert _is_excluded_place_name("홍대 감성카페") is False
+    assert _is_excluded_place_name("") is False
+
+
+async def test_excluded_place_name_normalizes_whitespace() -> None:
+    """trailing/leading whitespace로 endswith 우회 방지 — CodeRabbit fix (#175)."""
+    from src.graph.course_plan_node import _is_excluded_place_name  # pyright: ignore[reportMissingImports]
+
+    assert _is_excluded_place_name("홍대역 ") is True  # trailing space
+    assert _is_excluded_place_name(" 홍대역") is True  # leading space
+    assert _is_excluded_place_name("  강남역  ") is True  # 양쪽
+    assert _is_excluded_place_name("   ") is False  # 공백만
 
 
 # ---------------------------------------------------------------------------

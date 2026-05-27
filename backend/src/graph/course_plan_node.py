@@ -74,11 +74,29 @@ async def _embed_query_768d(query: str, api_key: str) -> list[float]:
 # ---------------------------------------------------------------------------
 # ① 카테고리 파싱
 # ---------------------------------------------------------------------------
-def _parse_categories(query: str, pq_category: Optional[str]) -> list[str]:
-    """쿼리에서 복수 카테고리 추출. "카페+맛집" → ["카페", "맛집"]."""
-    categories: list[str] = []
+_KNOWN_CATEGORIES = ["카페", "맛집", "음식점", "술집", "주점", "관광지", "공원", "쇼핑", "문화시설"]
 
-    _KNOWN_CATEGORIES = ["카페", "맛집", "음식점", "술집", "주점", "관광지", "공원", "쇼핑", "문화시설"]
+# 상황 키워드 → 카테고리 조합 매핑 (#175).
+# "데이트코스 짜줘"처럼 명시적 카테고리가 없는 상황어를 카테고리 다양화로 해석.
+# 동일 카테고리 5개만 나오던 회귀(예: 홍대역 5개) 회피의 핵심 룰.
+_SITUATION_CATEGORIES: dict[str, list[str]] = {
+    "데이트": ["카페", "맛집", "공원"],
+    "데이트코스": ["카페", "맛집", "공원"],
+    "여행": ["관광지", "맛집", "쇼핑"],
+    "관광": ["관광지", "맛집", "카페"],
+    "가족": ["맛집", "공원", "문화시설"],
+    "친구": ["카페", "맛집", "술집"],
+    "혼자": ["카페", "맛집", "문화시설"],
+}
+
+
+def _parse_categories(query: str, pq_category: Optional[str]) -> list[str]:
+    """쿼리에서 복수 카테고리 추출. "카페+맛집" → ["카페", "맛집"].
+
+    상황 키워드("데이트", "여행" 등)는 _SITUATION_CATEGORIES 매핑으로 다중 카테고리로 변환.
+    명시적 카테고리(_KNOWN_CATEGORIES)가 함께 있으면 그것을 우선.
+    """
+    categories: list[str] = []
 
     # query에서 +, &, 와/과 구분자로 분리 — 첫 매칭 구분자만 사용
     for sep in ["+", "&", "와 ", "과 ", ", "]:
@@ -95,6 +113,14 @@ def _parse_categories(query: str, pq_category: Optional[str]) -> list[str]:
         for keyword in _KNOWN_CATEGORIES:
             if keyword in query and keyword not in categories:
                 categories.append(keyword)
+
+    # 명시적 카테고리가 안 잡혔으면 상황 키워드 매핑 시도 (#175).
+    # "데이트코스", "여행" 같은 상황어 → 카테고리 조합으로 다양화.
+    if not categories:
+        for situation, mapped in _SITUATION_CATEGORIES.items():
+            if situation in query:
+                categories = list(mapped)
+                break
 
     if not categories and pq_category:
         categories = [pq_category]
@@ -207,7 +233,11 @@ async def _search_by_categories(
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    seen: set[str] = set()
+    # place_id 중복 + (name, district) 중복 둘 다 제거 (#175).
+    # 같은 이름의 장소가 출구별·중복 적재로 다른 place_id를 갖는 경우 회피
+    # (예: 홍대역 출구별 5개 row가 코스 stop 5개를 다 차지하던 회귀).
+    seen_ids: set[str] = set()
+    seen_name_district: set[tuple[str, str]] = set()
     merged: list[dict[str, Any]] = []
     for result in results:
         if isinstance(result, BaseException):
@@ -215,9 +245,17 @@ async def _search_by_categories(
             continue
         for place in result:
             pid = place.get("place_id", "")
-            if pid and pid not in seen:
-                seen.add(pid)
-                merged.append(place)
+            name = (place.get("name") or "").strip()
+            district_key = (place.get("district") or "").strip()
+            name_key = (name, district_key)
+            if not pid or pid in seen_ids:
+                continue
+            if name and name_key in seen_name_district:
+                continue
+            seen_ids.add(pid)
+            if name:
+                seen_name_district.add(name_key)
+            merged.append(place)
 
     return merged
 
@@ -239,7 +277,8 @@ JSON으로만 응답하세요:
 상위 10개만 포함하세요. 편의점·마트는 ranked_ids에 포함하지 마세요.
 """
 
-# 코스 추천에서 제외할 장소명 패턴 (편의점·마트·매점)
+# 코스 추천에서 제외할 장소명 패턴 (편의점·마트·매점·교통결절점).
+# substring 매칭이라 단순 단어만 — "역"처럼 다른 단어에 끼는 글자는 _COURSE_EXCLUDE_NAME_SUFFIXES로 분리.
 _COURSE_EXCLUDE_NAMES = [
     "GS25",
     "CU",
@@ -250,7 +289,28 @@ _COURSE_EXCLUDE_NAMES = [
     "매점",
     "마트",
     "관공서",
+    "터미널",
+    "공항",
+    "정류장",
 ]
+
+# 이름 끝 글자 매칭으로 제외할 패턴 (#175). "역" 같은 1자 substring은 "역삼동" 등에 오탐 — endswith로 안전 처리.
+_COURSE_EXCLUDE_NAME_SUFFIXES: tuple[str, ...] = ("역",)
+
+
+def _is_excluded_place_name(name: str) -> bool:
+    """코스 stop으로 부적합한 장소명 필터링. substring 패턴 + 끝 글자 패턴.
+
+    `name` 양끝 공백을 정규화 후 매칭 — "홍대역 " 같은 trailing space로 endswith 우회 방지.
+    """
+    normalized = (name or "").strip()
+    if not normalized:
+        return False
+    if any(ex in normalized for ex in _COURSE_EXCLUDE_NAMES):
+        return True
+    if normalized.endswith(_COURSE_EXCLUDE_NAME_SUFFIXES):
+        return True
+    return False
 
 
 async def _llm_rerank_candidates(
@@ -964,7 +1024,7 @@ async def course_plan_node(state: dict[str, Any]) -> dict[str, Any]:
         }
 
     # ②-b 편의점·마트 사전 필터링 + LLM Rerank
-    candidates = [c for c in candidates if not any(ex in (c.get("name") or "") for ex in _COURSE_EXCLUDE_NAMES)]
+    candidates = [c for c in candidates if not _is_excluded_place_name(c.get("name") or "")]
     if not candidates:
         return {
             "response_blocks": [
@@ -978,7 +1038,7 @@ async def course_plan_node(state: dict[str, Any]) -> dict[str, Any]:
         }
     candidates = await _llm_rerank_candidates(candidates, query, categories)
     # 안전망: LLM이 제외 대상을 포함시킨 경우 다시 제거
-    candidates = [c for c in candidates if not any(ex in (c.get("name") or "") for ex in _COURSE_EXCLUDE_NAMES)]
+    candidates = [c for c in candidates if not _is_excluded_place_name(c.get("name") or "")]
 
     # ③ Greedy NN 경로 최적화
     route = _greedy_nn_route(candidates)
