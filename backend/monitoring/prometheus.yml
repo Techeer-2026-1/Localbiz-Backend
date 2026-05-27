@@ -1,8 +1,9 @@
 # Prometheus 스크레이프 설정 (#155)
 #
-# target host.docker.internal:8000 — host-gateway로 해석되어 docker 호스트의 8000 포트
-# (백엔드 uvicorn)로 접근. docker-compose.monitoring.yml의 prometheus 서비스에
-# extra_hosts로 host-gateway 매핑이 있음 (Linux 호환).
+# 모니터링은 별도 VM(localbiz-monitoring 10.178.0.4)에서 동작하므로 백엔드는
+# API VM 내부 IP(10.178.0.3:8000)로 직접 긁는다. host.docker.internal은 같은 호스트
+# 가정이라 별도 VM에서는 모니터링 VM 자신(172.17.0.1)을 가리켜 scrape가 실패한다.
+# VPC 내부 통신 — GCP 방화벽에서 10.178.0.0/24 → tcp:8000 ingress 필요.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -10,7 +11,7 @@ global:
 scrape_configs:
   - job_name: 'localbiz-backend'
     static_configs:
-      - targets: ['host.docker.internal:8000']
+      - targets: ['10.178.0.3:8000']
         labels:
           app: localbiz-backend
           env: local
