@@ -79,38 +79,38 @@ async def test_parse_categories_fallback() -> None:
 # #175 상황 키워드 → 카테고리 조합 매핑
 # ---------------------------------------------------------------------------
 async def test_parse_categories_situation_date() -> None:
-    """'데이트코스' 상황 키워드 → 카페·맛집·공원 다중 카테고리 (#175 회귀 회피)."""
+    """'데이트코스' 상황 키워드 → 시간대별 시퀀스 (음식점·공원·카페·쇼핑·술집) #177."""
     from src.graph.course_plan_node import _parse_categories  # pyright: ignore[reportMissingImports]
 
     result = _parse_categories("이번주 토요일 홍대 데이트코스 짜줘", None)
-    assert result == ["카페", "맛집", "공원"]
+    assert result == ["음식점", "공원", "카페", "쇼핑", "술집"]
 
 
 async def test_parse_categories_situation_overrides_pq_category() -> None:
-    """상황 키워드가 pq_category(단일)보다 우선 — 데이트 의도면 다양화 (#175)."""
+    """상황 키워드가 pq_category(단일)보다 우선 — 데이트 의도면 시퀀스 적용 (#175/#177)."""
     from src.graph.course_plan_node import _parse_categories  # pyright: ignore[reportMissingImports]
 
     result = _parse_categories("강남 데이트 코스", "카페")
-    assert result == ["카페", "맛집", "공원"]
+    assert result == ["음식점", "공원", "카페", "쇼핑", "술집"]
 
 
 async def test_parse_categories_explicit_category_wins_over_situation() -> None:
-    """쿼리에 명시적 카테고리가 있으면 상황 키워드보다 우선."""
+    """쿼리에 명시적 카테고리가 있으면 상황 키워드보다 우선 (단일 카테고리 의도)."""
     from src.graph.course_plan_node import _parse_categories  # pyright: ignore[reportMissingImports]
 
     # "데이트"가 있어도 명시적 "카페"가 있으면 단일 카테고리 사용
     result = _parse_categories("홍대 카페 데이트 코스", None)
     assert "카페" in result
-    # 상황 매핑 ["카페","맛집","공원"] 전체로 확장되지 않고 명시 카테고리만
+    # 시퀀스로 확장되지 않고 명시 카테고리만 — 단일 케이스는 Greedy NN 경로
     assert result == ["카페"]
 
 
 async def test_parse_categories_situation_travel() -> None:
-    """'여행' 상황 키워드 → 관광지·맛집·쇼핑."""
+    """'여행' 상황 키워드 → 관광지·맛집·카페·쇼핑 시퀀스 (#177)."""
     from src.graph.course_plan_node import _parse_categories  # pyright: ignore[reportMissingImports]
 
     result = _parse_categories("부산 여행 코스 추천", None)
-    assert result == ["관광지", "맛집", "쇼핑"]
+    assert result == ["관광지", "맛집", "카페", "쇼핑"]
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +155,92 @@ async def test_excluded_place_name_normalizes_whitespace() -> None:
     assert _is_excluded_place_name(" 홍대역") is True  # leading space
     assert _is_excluded_place_name("  강남역  ") is True  # 양쪽
     assert _is_excluded_place_name("   ") is False  # 공백만
+
+
+async def test_excluded_place_name_intersections() -> None:
+    """교차로·사거리·로터리 — 코스 stop 부적합 (#177 운영 회귀)."""
+    from src.graph.course_plan_node import _is_excluded_place_name  # pyright: ignore[reportMissingImports]
+
+    assert _is_excluded_place_name("홍대삼거리") is True
+    assert _is_excluded_place_name("강남사거리") is True
+    assert _is_excluded_place_name("홍대입구역사거리R") is True  # substring "사거리"
+    assert _is_excluded_place_name("종로 교차로") is True
+    assert _is_excluded_place_name("광화문 로터리") is True
+    assert _is_excluded_place_name("청량리오거리") is True
+
+
+# ---------------------------------------------------------------------------
+# #177 _pick_by_sequence — 시간대별 카테고리 시퀀스
+# ---------------------------------------------------------------------------
+async def test_pick_by_sequence_orders_by_categories() -> None:
+    """시퀀스 순서대로 각 카테고리 1개씩 picked — 데이트 흐름 (#177)."""
+    from src.graph.course_plan_node import _pick_by_sequence  # pyright: ignore[reportMissingImports]
+
+    candidates = [
+        {"place_id": "p1", "name": "카페A", "category": "카페"},
+        {"place_id": "p2", "name": "맛집A", "category": "음식점"},
+        {"place_id": "p3", "name": "술집A", "category": "술집"},
+        {"place_id": "p4", "name": "공원A", "category": "공원"},
+        {"place_id": "p5", "name": "쇼핑A", "category": "쇼핑"},
+        {"place_id": "p6", "name": "카페B", "category": "카페"},
+    ]
+    sequence = ["음식점", "공원", "카페", "쇼핑", "술집"]
+    result = _pick_by_sequence(candidates, sequence)
+
+    names = [r["name"] for r in result]
+    # 시퀀스 순서대로 각 카테고리 첫 매칭
+    assert names == ["맛집A", "공원A", "카페A", "쇼핑A", "술집A"]
+
+
+async def test_pick_by_sequence_skips_missing_categories_and_fills() -> None:
+    """후보 없는 카테고리는 skip · max_stops까지 잔여 후보로 안전망 (#177)."""
+    from src.graph.course_plan_node import _pick_by_sequence  # pyright: ignore[reportMissingImports]
+
+    candidates = [
+        {"place_id": "p1", "name": "맛집A", "category": "음식점"},
+        {"place_id": "p2", "name": "맛집B", "category": "음식점"},
+        {"place_id": "p3", "name": "카페A", "category": "카페"},
+    ]
+    sequence = ["음식점", "공원", "카페", "쇼핑", "술집"]
+    result = _pick_by_sequence(candidates, sequence)
+
+    names = [r["name"] for r in result]
+    # 공원·쇼핑·술집은 후보 없음 → 시퀀스에서 음식점·카페만 picked
+    # 그 후 잔여(맛집B)로 안전망 채움 — 총 3개
+    assert names == ["맛집A", "카페A", "맛집B"]
+
+
+async def test_pick_by_sequence_partial_category_match() -> None:
+    """카테고리 substring 매칭 — '음식점' 시퀀스가 '한식음식점' 같은 세분 카테고리도 매칭."""
+    from src.graph.course_plan_node import _pick_by_sequence  # pyright: ignore[reportMissingImports]
+
+    candidates = [
+        {"place_id": "p1", "name": "한식집", "category": "한식음식점"},
+        {"place_id": "p2", "name": "분위기카페", "category": "디저트카페"},
+    ]
+    sequence = ["음식점", "카페"]
+    result = _pick_by_sequence(candidates, sequence)
+
+    names = [r["name"] for r in result]
+    assert names == ["한식집", "분위기카페"]
+
+
+async def test_pick_by_sequence_deduplicates_by_place_id() -> None:
+    """같은 place_id는 시퀀스에서 한 번만 picked — 중복 제거 안전망."""
+    from src.graph.course_plan_node import _pick_by_sequence  # pyright: ignore[reportMissingImports]
+
+    # 같은 p1이 음식점과 카페 둘 다 매칭 가능한 케이스
+    candidates = [
+        {"place_id": "p1", "name": "복합공간", "category": "음식점/카페"},
+        {"place_id": "p2", "name": "공원A", "category": "공원"},
+        {"place_id": "p3", "name": "카페A", "category": "카페"},
+    ]
+    sequence = ["음식점", "공원", "카페"]
+    result = _pick_by_sequence(candidates, sequence)
+
+    names = [r["name"] for r in result]
+    # p1이 음식점에 picked → 카페에는 다시 안 잡혀서 p3가 picked
+    assert names == ["복합공간", "공원A", "카페A"]
 
 
 # ---------------------------------------------------------------------------
