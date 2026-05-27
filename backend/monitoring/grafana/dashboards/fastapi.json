@@ -123,6 +123,25 @@
         "legend": {"displayMode": "list", "placement": "bottom"},
         "tooltip": {"mode": "multi"}
       }
+    },
+    {
+      "id": 5,
+      "type": "logs",
+      "title": "Logs (localbiz-api, via Loki)",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 16},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [
+        {
+          "expr": "{job=\"localbiz-api\"}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      }
     }
   ]
 }
