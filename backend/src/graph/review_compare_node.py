@@ -25,10 +25,13 @@ _COMPARE_SYSTEM_PROMPT = """\
 
 def _extract_place_names(processed_query: dict[str, Any], query: str) -> list[str]:
     """vs/VS/와 구분자로 장소명 추출. 2개 미만이면 [] 반환."""
-    for sep in (" vs ", " VS ", " 와 "):
+    # 한국어 비교 구분자 — 부착형('점이랑')까지 포함. 첫 매칭이 2개 이상 분할되면 채택.
+    # REVIEW_COMPARE intent로 이미 분류된 쿼리이므로 과분할 위험은 낮다.
+    for sep in (" vs ", " VS ", "이랑", " 와 ", " 과 ", "하고", " 그리고 ", " 랑 "):
         if sep in query:
             parts = [p.strip() for p in query.split(sep)]
-            parts = [re.sub(r"\s*(비교|compare).*$", "", p, flags=re.IGNORECASE).strip() for p in parts]
+            # 꼬리말(리뷰/비교/compare …) 제거 — '명동점 리뷰 비교해줘' → '명동점'
+            parts = [re.sub(r"\s*(리뷰|비교|compare).*$", "", p, flags=re.IGNORECASE).strip() for p in parts]
             parts = [p for p in parts if p]
             if len(parts) >= 2:
                 return parts
