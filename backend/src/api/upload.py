@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import timedelta
 from typing import Optional
@@ -36,6 +37,8 @@ _CONTENT_TYPE_TO_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "
 _MAX_BYTES = 10 * 1024 * 1024  # 10MB
 _CHUNK_SIZE = 64 * 1024  # 64KB
 _SIGNED_URL_HOURS = 1
+_GCS_TIMEOUT_SEC = 30  # GCS 업로드 타임아웃 (C8 — 무한 대기/hang 방지)
+_GCS_UPLOAD_ATTEMPTS = 2  # 일시적 GCS·네트워크 오류 재시도 횟수
 
 
 class ImageUploadResponse(BaseModel):
@@ -114,30 +117,45 @@ def _sync_upload_to_gcs(
     ext = _CONTENT_TYPE_TO_EXT[content_type]
     blob_name = f"uploads/{uuid.uuid4()}.{ext}"
 
-    try:
-        client = storage.Client()
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(blob_name)
-        blob.upload_from_string(data, content_type=content_type)
+    # C8: timeout + 재시도 — GCS/네트워크 일시 지연으로 인한 간헐 업로드 실패 방지.
+    # blob_name은 루프 밖에서 고정 → 재시도 시 동일 blob 덮어쓰기(중복 누적 없음).
+    last_err: Optional[Exception] = None
+    for attempt in range(1, _GCS_UPLOAD_ATTEMPTS + 1):
+        try:
+            client = storage.Client()
+            bucket = client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            blob.upload_from_string(data, content_type=content_type, timeout=_GCS_TIMEOUT_SEC)
 
-        # GCE Workload Identity: private key 없이 IAM signBlob API로 서명
-        credentials, _ = google.auth.default()
-        auth_req = google.auth.transport.requests.Request()
-        credentials.refresh(auth_req)  # pyright: ignore[reportAttributeAccessIssue]
+            # GCE Workload Identity: private key 없이 IAM signBlob API로 서명
+            credentials, _ = google.auth.default()
+            auth_req = google.auth.transport.requests.Request()
+            credentials.refresh(auth_req)  # pyright: ignore[reportAttributeAccessIssue]
 
-        signed_url: str = blob.generate_signed_url(
-            expiration=timedelta(hours=_SIGNED_URL_HOURS),
-            method="GET",
-            version="v4",
-            service_account_email=credentials.service_account_email,  # pyright: ignore[reportAttributeAccessIssue]
-            access_token=credentials.token,  # pyright: ignore[reportAttributeAccessIssue]
-        )
-        logger.info("upload: user_id=%s blob=%s", user_id, blob_name)
-        return signed_url
+            signed_url: str = blob.generate_signed_url(
+                expiration=timedelta(hours=_SIGNED_URL_HOURS),
+                method="GET",
+                version="v4",
+                service_account_email=credentials.service_account_email,  # pyright: ignore[reportAttributeAccessIssue]
+                access_token=credentials.token,  # pyright: ignore[reportAttributeAccessIssue]
+            )
+            logger.info("upload: user_id=%s blob=%s attempt=%d", user_id, blob_name, attempt)
+            return signed_url
 
-    except Exception as e:
-        logger.exception("upload: GCS 업로드 실패 blob=%s", blob_name)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="이미지 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.",
-        ) from e
+        except Exception as e:  # noqa: PERF203 — 재시도 루프 내 예외 처리 필요
+            last_err = e
+            logger.warning(
+                "upload: GCS 업로드 실패 (attempt %d/%d) blob=%s err=%s",
+                attempt,
+                _GCS_UPLOAD_ATTEMPTS,
+                blob_name,
+                e.__class__.__name__,
+            )
+            if attempt < _GCS_UPLOAD_ATTEMPTS:
+                time.sleep(0.5 * attempt)  # 선형 백오프
+
+    logger.error("upload: GCS 업로드 최종 실패 blob=%s", blob_name)
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="이미지 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.",
+    ) from last_err
