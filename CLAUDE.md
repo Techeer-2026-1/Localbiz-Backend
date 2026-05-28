@@ -73,10 +73,17 @@ SSE → intent_router → query_preprocessor → (조건부 라우팅)
   ├── EVENT_RECOMMEND  → event_recommend  → response_builder → END
   ├── COURSE_PLAN      → course_plan      → response_builder → END
   ├── DETAIL_INQUIRY   → detail_inquiry   → response_builder → END
+  ├── ANALYSIS         → analysis         → response_builder → END
+  ├── COST_ESTIMATE    → cost_estimate    → response_builder → END
+  ├── CROWDEDNESS      → crowdedness      → response_builder → END
+  ├── REVIEW_COMPARE   → review_compare   → response_builder → END
+  ├── IMAGE_SEARCH     → image_search     → response_builder → END
   ├── BOOKING          → booking          → response_builder → END
   ├── CALENDAR         → calendar         → response_builder → END
   └── GENERAL          → general          → response_builder → END
 ```
+
+> 전체 intent 분류는 `backend/AGENTS.md`의 "12+1 Intent Types" 참조. `refine_node`는 멀티턴 보정용 보조 노드(`refine_helpers.py`).
 
 **핵심 패턴**: `AgentState.response_blocks`는 `Annotated[list, operator.add]`로 정의되어 각 노드가 list를 반환하면 자동 append. `text_stream` 블록은 `{"type":"text_stream","system":"...","prompt":"..."}`을 `response_blocks`에 추가하면 `sse.py`에서 Gemini `astream()`으로 토큰 단위 스트리밍.
 
@@ -93,7 +100,12 @@ SSE → intent_router → query_preprocessor → (조건부 라우팅)
 | `src/models/blocks.py` | 16종 SSE 이벤트 타입 Pydantic 모델 + `CONTENT_BLOCK_TYPES` registry |
 | `src/db/postgres.py` | asyncpg pool (init/close) |
 | `src/db/opensearch.py` | OpenSearch 768d k-NN 벡터 검색 |
-| `src/tools/` | ReAct 에이전트 도구 (Phase 1 이후 생성 예정) |
+| `src/api/*.py` | REST 핸들러 (auth, users, chats, bookmarks, place_bookmarks, calendar, google_calendar_auth, share, upload) + `deps.py` (FastAPI 의존성) |
+| `src/services/` | 비즈니스 로직 (`auth_service.py`, `user_service.py`) |
+| `src/core/security.py` | JWT·인증·해시 등 보안 유틸 |
+| `src/utils/` | `llm_parsing.py` (Gemini JSON 파싱), `geo_mapping.py` (좌표↔행정동), `resilience.py` (재시도·서킷브레이커) |
+| `src/telemetry.py` | OpenTelemetry Jaeger tracing (`JAEGER_HOST` 없으면 no-op) |
+| `src/health.py` | 헬스체크 + Prometheus 메트릭 엔드포인트 |
 | `scripts/etl/` | ETL 스크립트 (`embed_utils.py`의 `embed_texts()` 공유) |
 
 ### Plan-Driven Workflow
@@ -102,8 +114,7 @@ SSE → intent_router → query_preprocessor → (조건부 라우팅)
 
 ### Extension Points
 
-- **새 노드**: `src/graph/*_node.py` → `real_builder.py`에 등록 → `intent_router_logic.py`에 매핑
-- **새 도구**: `src/tools/` → `search_agent.py` 또는 `action_agent.py`의 tools 리스트에 등록
+- **새 노드**: `src/graph/*_node.py` → `real_builder.py`에 등록(`add_node` + 조건부 엣지) → `intent_router_node.py`의 intent 매핑 갱신
 - **새 ETL**: `scripts/etl/` → `embed_utils.py`의 `embed_texts()` 사용, argparse + `--dry-run` 필수
 - **새 응답 블록/intent**: 기획서 §4.5 먼저 업데이트 → `src/models/blocks.py` Pydantic 모델 → 노드 구현
 - **DB 스키마 변경**: ERD 보고서 버전 bump → `scripts/migrations/` 마이그레이션 스크립트
