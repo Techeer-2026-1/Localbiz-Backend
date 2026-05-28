@@ -35,6 +35,8 @@ from typing import Any, Optional
 
 from opentelemetry import trace  # pyright: ignore[reportMissingImports]
 
+from src.graph.event_filters import is_real_event  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 # tracer는 JAEGER_HOST 미설정 환경(로컬·테스트)에서도 no-op으로 동작 — telemetry.py 활성 시 자동으로 export.
@@ -845,6 +847,9 @@ async def event_search_node(state: dict[str, Any]) -> dict[str, Any]:
     # 2) 병합 + PG 2차 보강
     merged = await _merge_candidates(pool, pg_events, os_events)
 
+    # 2-b) 시설 정보 row 제외 (#193) — events 테이블의 "서울시시설대관" 등 시설명이 검색 결과에 섞이던 회귀 차단.
+    merged = [e for e in merged if is_real_event(e)]
+
     # 3) Rerank 후보 한도 컷 (Naver append 전 — Naver 결과가 잘리지 않도록)
     merged = merged[:_MAX_PRERANK]
     merged_count = len(merged)
@@ -859,7 +864,9 @@ async def event_search_node(state: dict[str, Any]) -> dict[str, Any]:
             settings.naver_client_id,
             settings.naver_client_secret,
         )
+        # Naver 결과에도 동일 필터 적용 (일관성).
         naver_events = [_naver_to_event_dict(item) for item in naver_items]
+        naver_events = [e for e in naver_events if is_real_event(e)]
         merged += naver_events
 
     # 5) LLM Rerank (순위 재배치 + per-event 소개)
