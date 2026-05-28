@@ -95,9 +95,11 @@ async def _search_pg(
         params.append(f"%{neighborhood}%")
         sql += f" AND address ILIKE ${len(params)}"
 
-    if keywords:
-        params.append(f"%{keywords[0]}%")
-        sql += f" AND name ILIKE ${len(params)}"
+    # keywords(의미 조건)는 name ILIKE에서 제외 (C3) — '쉴만한 곳'의 키워드 '휴식'이
+    # 가게 이름 '휴식'을 매칭하는 노이즈 방지. 의미 매칭은 OS k-NN
+    # (_search_os_places / _search_os_reviews)이 담당하며, PG는 정형 필터
+    # (district/category/neighborhood)만 적용한다. neighborhood(위)와 동일한 이유.
+    _ = keywords  # 시그니처 유지 (호출부 호환) — PG 정형 검색에서는 미사용
 
     params.append(_PG_LIMIT)
     sql += f" LIMIT ${len(params)}"
