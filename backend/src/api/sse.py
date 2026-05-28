@@ -394,6 +394,10 @@ async def chat_stream(
                 if cancelled or gemini_error:
                     break
 
+                # 빈 응답 안전망(C1): 이 intent에서 콘텐츠 블록이 하나라도 나왔는지 추적.
+                # intent 블록만 나오고 끝나면 화면이 빈 것처럼 보이므로 안내 text를 보장한다.
+                content_emitted = False
+
                 input_state: dict[str, Any] = {
                     "query": sub_query,
                     "thread_id": thread_id,
@@ -452,6 +456,7 @@ async def chat_stream(
 
                                 if full_text:
                                     assistant_blocks.append({"type": "text_stream", "content": full_text})
+                                    content_emitted = True
 
                                 if cancelled or gemini_error:
                                     break
@@ -461,9 +466,22 @@ async def chat_stream(
                             else:
                                 yield format_sse_event(block_type, block)
                                 assistant_blocks.append(block)
+                                # intent 블록은 콘텐츠로 치지 않는다 (항상 방출되므로)
+                                if block_type != "intent":
+                                    content_emitted = True
 
                         if cancelled or gemini_error:
                             break
+
+                # 빈 응답 안전망(C1): intent가 정상 종료했는데 콘텐츠 블록이 0개면
+                # 빈 화면 대신 안내 text를 보장한다. (SSE 16종 내 기존 'text' 타입 — 불변식 #10)
+                if not cancelled and not gemini_error and not content_emitted:
+                    _empty_block = {
+                        "type": "text",
+                        "content": "요청하신 조건에 맞는 결과를 찾지 못했어요. 지역이나 조건을 바꿔 다시 시도해 주세요.",
+                    }
+                    yield format_sse_event("text", _empty_block)
+                    assistant_blocks.append(_empty_block)
 
                 # 중간 intent 완료 → done_partial emit (DB 미저장)
                 if not is_last and not cancelled and not gemini_error:
