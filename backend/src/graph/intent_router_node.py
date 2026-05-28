@@ -160,6 +160,14 @@ Rules:
 - Maximum 3 intents per query.
 - sub_query: the portion of the original query for each intent (in Korean).
 - If only one intent, sub_query = the original query.
+- IMPORTANT: each sub_query MUST be self-contained — preserve its OWN region/place/time
+  context. Never drop the location from a sub_query, even if that location is mentioned
+  only once in the original query. Carry the relevant region into every sub_query it applies to.
+  Example: "명동에서 좋은 카페 찾아주고 홍대에서는 밥집 하나 찾아줘"
+    → {"intents": [
+         {"intent": "PLACE_SEARCH", "confidence": 0.9, "sub_query": "명동에서 좋은 카페 찾아줘"},
+         {"intent": "PLACE_SEARCH", "confidence": 0.9, "sub_query": "홍대에서 밥집 하나 찾아줘"}
+       ]}
 
 Respond in JSON: {"intents": [{"intent": "...", "confidence": 0.0-1.0, "sub_query": "..."}, ...]}
 """
