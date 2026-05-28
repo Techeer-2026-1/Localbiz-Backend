@@ -109,6 +109,33 @@ async def _load_history_from_db(thread_id: str) -> list[dict[str, str]]:
                 text_parts.append(block.get("content", ""))
             elif btype == "text_stream" and role == "assistant":
                 text_parts.append(block.get("content", ""))
+            elif btype == "course" and role == "assistant":
+                title = block.get("title", "")
+                stops: list[Any] = block.get("stops") or []
+                total_stay: Optional[int] = block.get("total_stay_min")
+                stop_parts: list[str] = []
+                for s in stops:
+                    if not isinstance(s, dict):
+                        continue
+                    place = s.get("place") or {}
+                    name = place.get("name", "") if isinstance(place, dict) else ""
+                    if not name:
+                        continue
+                    arrival: str = s.get("arrival_time") or ""
+                    dur: Optional[int] = s.get("duration_min")
+                    entry = name
+                    if arrival:
+                        entry += f" {arrival}"
+                    if dur is not None:
+                        entry += f" {dur}분"
+                    stop_parts.append(entry)
+                if stop_parts:
+                    label = title or "코스"
+                    summary = f"[{label} ({len(stop_parts)}곳): {', '.join(stop_parts)}"
+                    if total_stay is not None:
+                        summary += f", 총 체류 {total_stay}분"
+                    summary += "]"
+                    text_parts.append(summary)
         content = " ".join(t for t in text_parts if t).strip()
         if content:
             history.append({"role": role, "content": content})
