@@ -133,6 +133,23 @@ jobs:
           GOOGLE_CALENDAR_REDIRECT_URI: ${{ secrets.GOOGLE_CALENDAR_REDIRECT_URI }}
           GCS_BUCKET_NAME: ${{ secrets.GCS_BUCKET_NAME }}
 
+      # ②-c scp 전 선제 디스크 정리 — 디스크 풀 시 scp "write remote Failure" 방지(자가 치유).
+      #     기존 정리는 deploy 스크립트 내부(scp 이후 실행)라, 디스크가 이미 차면 업로드 자체가
+      #     실패해 정리 스크립트가 올라가지도 못하는 교착이 발생한다. ssh --command는 파일을
+      #     올리지 않으므로 디스크 풀에도 동작 → docker 정리로 공간 확보 후 scp가 성공한다.
+      #     docker 정리는 ijeong이 docker 그룹이라 sudo 불필요. journal/apt는 best-effort.
+      - name: Free disk on instance (pre-scp)
+        run: |
+          gcloud compute ssh ijeong@${{ env.GCE_INSTANCE }} \
+            --zone=${{ env.GCE_ZONE }} --project=${{ env.PROJECT_ID }} --quiet \
+            --command='echo "[disk before]"; df -h / | tail -1; \
+              rm -f /tmp/secrets-*.env /tmp/deploy-*.sh 2>/dev/null || true; \
+              docker system prune -af --filter "until=72h" || true; \
+              docker builder prune -af || true; \
+              sudo journalctl --vacuum-size=200M 2>/dev/null || true; \
+              sudo apt-get clean 2>/dev/null || true; \
+              echo "[disk after]"; df -h / | tail -1'
+
       # ③ 서버에 전송 + 실행
       - name: Upload and execute deploy
         run: |
