@@ -9,15 +9,15 @@
   4. Rerank 후보 한도 컷 (_MAX_PRERANK) — Naver append 전
   5. PG ∪ OS 병합 < 3건 → Naver 블로그 검색 API fallback (graceful degradation)
   6. LLM Rerank (Gemini Flash — 순위 재배치 + per-event 추천 사유 동시 생성)
-  7. response_blocks: events[] + text_stream(추천 사유 강조) + references[]
+  7. response_blocks: events[] + text_stream(추천 사유 강조)
+     · references 블록은 events 카드 detail_url로 통합 (#193) — FE가 카드 안 하이퍼링크로 렌더링
 
 EVENT_SEARCH와의 차별화:
   - Rerank 시스템 프롬프트가 "추천 이유" 명시 (카테고리 적합성/일정·위치/특징 근거)
-  - references 블록에 DB 행사의 detail_url도 포함 (Naver fallback만이 아님)
-    → 명세 §4.5 EVENT_RECOMMEND 응답 순서가 references 항상 포함
+  - events 카드 detail_url로 출처 링크 통합 (#193 — 이전엔 references 블록 별도 전송)
 
 응답 블록 순서 (기획서 §4.5, 불변식 #11):
-  intent → status → text_stream → events[] → references → done
+  intent → status → text_stream → events[] → done
 
 불변식 #2: event_id == events_vector._id (PG 부재 OS hit는 폐기)
 불변식 #4: PG 2차 보강 쿼리에 is_deleted = FALSE
@@ -41,6 +41,8 @@ import logging
 import re
 from datetime import date
 from typing import Any, Optional
+
+from src.graph.event_filters import is_real_event  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
@@ -642,26 +644,8 @@ def _build_blocks(
         }
     )
 
-    # 3. references 블록 — EVENT_SEARCH와 차별화: DB + Naver 모두 detail_url 있으면 포함
-    references: list[dict[str, Any]] = []
-    for e in events:
-        if not e.get("detail_url"):
-            continue
-        references.append(
-            {
-                "title": e.get("title", ""),
-                "url": e["detail_url"],
-                "source": e.get("source") or "events_db",
-            }
-        )
-
-    if references:
-        blocks.append(
-            {
-                "type": "references",
-                "items": references,
-            }
-        )
+    # references 블록 제거 (#193) — events 카드와 동일 정보가 "추천 사유 / 인용" 섹션에 중복 노출되던 UX 회귀.
+    # events 카드의 detail_url 필드는 유지 — FE가 카드 상단에 하이퍼링크로 통합 렌더링.
 
     return blocks
 
@@ -814,6 +798,9 @@ async def event_recommend_node(state: dict[str, Any]) -> dict[str, Any]:
     # 2) 병합 + PG 2차 보강
     merged = await _merge_candidates(pool, pg_events, os_events)
 
+    # 2-b) 시설 정보 row 제외 (#193) — events 테이블에 적재된 "서울시시설대관" 등 시설명이 행사로 표시되던 회귀 차단.
+    merged = [e for e in merged if is_real_event(e)]
+
     # 3) Rerank 후보 한도 컷 (Naver append 전 — Naver 결과가 잘리지 않도록)
     merged = merged[:_MAX_PRERANK]
     merged_count = len(merged)
@@ -827,7 +814,9 @@ async def event_recommend_node(state: dict[str, Any]) -> dict[str, Any]:
             settings.naver_client_id,
             settings.naver_client_secret,
         )
+        # Naver 결과도 동일 필터 통과 — title이 "○○ 대강당"으로 끝나는 블로그 글 등 회피.
         naver_events = [_naver_to_event_dict(item) for item in naver_items]
+        naver_events = [e for e in naver_events if is_real_event(e)]
         merged += naver_events
 
     # 5) LLM Rerank (순위 재배치 + per-event 추천 사유)

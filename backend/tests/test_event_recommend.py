@@ -99,7 +99,7 @@ _NAVER_EVENTS: list[dict[str, Any]] = [
 
 
 async def test_build_blocks_with_db_events_only() -> None:
-    """DB events만 있을 때 — EVENT_RECOMMEND 차별화: references에 DB detail_url 포함."""
+    """DB events만 있을 때 — events 카드에 detail_url 통합, references 블록 미전송 (#193)."""
     from src.graph.event_recommend_node import _build_blocks  # pyright: ignore[reportMissingImports]
 
     blocks = _build_blocks("이번 주말 송파구 행사 추천", _DB_EVENTS, [])
@@ -107,8 +107,8 @@ async def test_build_blocks_with_db_events_only() -> None:
     block_types = [b["type"] for b in blocks]
     assert "text_stream" in block_types
     assert "events" in block_types
-    # EVENT_SEARCH와 차별화: DB 행사도 detail_url 있으면 references에 포함
-    assert "references" in block_types
+    # #193: references 블록은 더 이상 보내지 않음 — events 카드의 detail_url로 통합
+    assert "references" not in block_types
 
     events_block = next(b for b in blocks if b["type"] == "events")
     assert events_block["total_count"] == 1
@@ -116,15 +116,13 @@ async def test_build_blocks_with_db_events_only() -> None:
     assert item["title"] == "재즈 페스티벌"
     assert item["category"] == "공연"
     assert item["district"] == "송파구"
-
-    refs_block = next(b for b in blocks if b["type"] == "references")
-    assert len(refs_block["items"]) == 1
-    assert refs_block["items"][0]["url"] == "https://example.com/event/1"
-    assert refs_block["items"][0]["source"] == "서울시문화행사"
+    # 출처 링크는 events 카드 필드로 유지 — FE가 카드 안에 하이퍼링크 렌더링
+    assert item["detail_url"] == "https://example.com/event/1"
+    assert item["source"] == "서울시문화행사"
 
 
 async def test_build_blocks_with_naver_fallback() -> None:
-    """DB + Naver 통합 시 references 블록에 양쪽 출처 모두 포함."""
+    """DB + Naver 통합 — events 카드 안에만 detail_url 유지, references 블록 미전송 (#193)."""
     from src.graph.event_recommend_node import _build_blocks  # pyright: ignore[reportMissingImports]
 
     merged = _DB_EVENTS + _NAVER_EVENTS
@@ -133,12 +131,17 @@ async def test_build_blocks_with_naver_fallback() -> None:
     block_types = [b["type"] for b in blocks]
     assert "text_stream" in block_types
     assert "events" in block_types
-    assert "references" in block_types
+    # #193: references 블록 미전송 — DB·Naver 모두 카드 detail_url로 통합
+    assert "references" not in block_types
 
-    refs_block = next(b for b in blocks if b["type"] == "references")
-    assert len(refs_block["items"]) == 2
-    sources = {r["source"] for r in refs_block["items"]}
+    events_block = next(b for b in blocks if b["type"] == "events")
+    items = events_block["items"]
+    assert events_block["total_count"] == 2
+    # DB·Naver 양쪽 모두 detail_url + source가 카드에 포함됨
+    sources = {item.get("source") for item in items}
     assert sources == {"서울시문화행사", "naver_blog"}
+    detail_urls = {item.get("detail_url") for item in items}
+    assert all(url for url in detail_urls)
 
 
 async def test_build_blocks_recommend_prompt_keywords() -> None:
