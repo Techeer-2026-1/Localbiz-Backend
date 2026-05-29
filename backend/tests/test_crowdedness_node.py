@@ -45,7 +45,7 @@ async def test_classify_level_혼잡_high_ratio() -> None:
 
 
 async def test_classify_level_zero_avg() -> None:
-    """avg_pop=0 이면 노드가 _classify_level 을 호출하지 않고 '보통' 반환."""
+    """avg_pop=0 — 등급 산정 불가 안내 (보통 폴백 금지). current_pop은 그대로 노출."""
     from src.graph.crowdedness_node import crowdedness_node  # pyright: ignore[reportMissingImports]
 
     pop_row: dict[str, Any] = {
@@ -70,8 +70,13 @@ async def test_classify_level_zero_avg() -> None:
 
     blocks = result["response_blocks"]
     assert len(blocks) == 1
-    assert "보통" in blocks[0]["prompt"]
-    assert "홍대" in blocks[0]["prompt"]
+    prompt = blocks[0]["prompt"]
+    assert "홍대" in prompt
+    assert "1,000" in prompt
+    assert "산정하지 못했" in prompt
+    # 보통/한산/혼잡 등급 폴백 금지
+    assert "**보통**" not in prompt
+    assert "혼잡도는" not in prompt
 
 
 # ---------------------------------------------------------------------------

@@ -193,7 +193,10 @@ async def fetch_congestion_by_district(
         return None
     current_pop = int(pop.get("current_pop") or 0)
     avg_pop = float(pop.get("avg_pop") or 0)
-    level_ko = "보통" if avg_pop == 0 else _classify_level(current_pop / avg_pop)
+    # baseline 없으면 places 카드에 misleading 등급 붙이지 않음 — congestion 필드 자체 생략.
+    if avg_pop == 0:
+        return None
+    level_ko = _classify_level(current_pop / avg_pop)
     base_date = pop.get("base_date")
     updated_at = base_date.isoformat() if base_date is not None else ""
     return {
@@ -250,5 +253,20 @@ async def crowdedness_node(state: dict[str, Any]) -> dict[str, Any]:
     avg_pop = float(pop.get("avg_pop") or 0)
     base_date = pop.get("base_date")
 
-    level = "보통" if avg_pop == 0 else _classify_level(current_pop / avg_pop)
+    # 30일 동일 시간대 baseline이 없으면 비율 비교 불가 — "보통" 폴백 대신 정직하게 미산정 안내.
+    if avg_pop == 0:
+        return {
+            "response_blocks": [
+                {
+                    "type": "text_stream",
+                    "system": "당신은 서울 로컬 라이프 AI 챗봇입니다. 자기소개나 인사로 시작하지 말고 바로 본론으로 답변하세요.",
+                    "prompt": (
+                        f"{area_name} 현재 생활인구는 {current_pop:,}명입니다. "
+                        f"다만 동일 시간대 30일 비교 데이터가 부족해 혼잡도 등급은 산정하지 못했습니다."
+                    ),
+                }
+            ]
+        }
+
+    level = _classify_level(current_pop / avg_pop)
     return {"response_blocks": _build_crowdedness_blocks(level, current_pop, avg_pop, area_name, base_date)}
