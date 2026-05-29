@@ -142,7 +142,8 @@ Phase 1 (active):
 - REVIEW_COMPARE: comparing two or more places by 6 metrics
 - CROWDEDNESS: asking about current crowdedness, busyness, or population density of an area.
   Accept noun-phrase queries without verbs (e.g. "홍대 혼잡도", "강남 사람 많아?", "지금 이태원").
-  Trigger keywords: "혼잡", "혼잡도", "붐비", "사람 많", "사람 적", "한산", "유동인구", "생활인구".
+  Trigger keywords: "혼잡", "혼잡도", "붐비", "사람 많", "사람 적", "한산", "유동인구", "생활인구", "지금 ~ 어때".
+  Example: "현재 홍대 혼잡도", "강남역 사람 많아?", "이태원 지금 붐비나?", "성수동 한산해?" → CROWDEDNESS.
 - COST_ESTIMATE: asking about expected cost or price range for a place, restaurant, or activity
 - IMAGE_SEARCH: user sends an image URL to identify a place or find similar places; also when user refers to a previously sent image without a new URL
 - REFINE: user wants to modify, replace, remove, add to, or regenerate a previous response. Examples: "3번 장소 바꿔줘", "그거 말고 다른 거", "카페 빼줘", "다시 추천해줘", "강남 말고 홍대로", "마음에 안 들어", "2번 행사 다른 걸로", "하나 더 추가해줘". NOT REFINE (classify as GENERAL instead): questions about a previous response ("이게 뭐야?", "씨엘이 홍대 씨엘인 거 아니야?", "여기 맛있어?", "몇 시에 문 닫아?"), opinions ("좋다", "괜찮네"), or follow-up questions that don't request a change.

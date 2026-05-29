@@ -50,8 +50,10 @@ async def _resolve_dong_codes(
                 SELECT adm_dong_code
                 FROM administrative_districts
                 WHERE adm_dong_name ILIKE ANY($1::text[])
+                  AND ($2::text IS NULL OR district = $2)
                 """,
                 like_patterns,
+                district,
             )
             if rows:
                 return [r["adm_dong_code"] for r in rows], neighborhood
@@ -61,8 +63,10 @@ async def _resolve_dong_codes(
             SELECT adm_dong_code
             FROM administrative_districts
             WHERE adm_dong_name ILIKE $1
+              AND ($2::text IS NULL OR district = $2)
             """,
             f"%{neighborhood}%",
+            district,
         )
         if rows:
             return [r["adm_dong_code"] for r in rows], neighborhood
@@ -76,8 +80,10 @@ async def _resolve_dong_codes(
                 SELECT adm_dong_code
                 FROM administrative_districts
                 WHERE adm_dong_name ILIKE $1
+                  AND ($2::text IS NULL OR district = $2)
                 """,
                 f"%{trimmed}%",
+                district,
             )
             if rows:
                 return [r["adm_dong_code"] for r in rows], neighborhood
@@ -106,6 +112,7 @@ async def _fetch_population(
 
     base_date 는 population_stats 의 최신 일자.
     avg_pop 은 동일 dong 집합·동일 time_slot 의 일자별 SUM의 30일 평균.
+    단, 최신일(base_date) 자체는 baseline 에서 제외해 현재 스냅샷 오염을 막는다.
     """
     if not dong_codes:
         return None
@@ -124,6 +131,7 @@ async def _fetch_population(
                      WHERE p2.adm_dong_code = ANY($1::text[])
                        AND p2.time_slot = $2
                        AND p2.base_date >= latest.d - INTERVAL '30 days'
+                       AND p2.base_date < latest.d
                      GROUP BY p2.base_date
                  ) dt),
                 0
