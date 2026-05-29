@@ -49,17 +49,13 @@ async def test_private_extended_property_not_percent_encoded() -> None:
         patch(_PATCH_TOKEN, new=AsyncMock(return_value=_ACCESS_TOKEN)),
         respx.mock,
     ):
-        respx.get("https://www.googleapis.com/calendar/v3/calendars/primary/events").mock(
-            side_effect=capture
-        )
+        respx.get("https://www.googleapis.com/calendar/v3/calendars/primary/events").mock(side_effect=capture)
         await list_calendar_events(user_id=_USER_ID)
 
     assert "privateExtendedProperty=source=localbiz" in captured_url["url"], (
         f"URL에 raw 'source=localbiz' 가 없음: {captured_url['url']}"
     )
-    assert "source%3Dlocalbiz" not in captured_url["url"], (
-        f"'=' 가 %3D 로 인코딩됨: {captured_url['url']}"
-    )
+    assert "source%3Dlocalbiz" not in captured_url["url"], f"'=' 가 %3D 로 인코딩됨: {captured_url['url']}"
 
 
 # ---------------------------------------------------------------------------
