@@ -75,6 +75,7 @@ async def list_calendar_events(
         "maxResults": limit,
         "singleEvents": "true",
         "orderBy": "startTime",
+        "privateExtendedProperty": "source=localbiz",
     }
     if page_token:
         params["pageToken"] = page_token

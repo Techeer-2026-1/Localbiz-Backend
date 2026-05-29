@@ -309,3 +309,102 @@ async def test_conversation_history_forwarded_to_extractor() -> None:
 
     assert captured["pq"] == pq
     assert captured["history"] == history
+
+
+# ---------------------------------------------------------------------------
+# course 블록 히스토리 파싱 — #195 체류시간 미반영 수정 검증
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_load_history_from_db_includes_course_timing() -> None:
+    """_load_history_from_db: course 블록에서 장소명·도착시간·체류시간을 히스토리에 포함."""
+    course_block = {
+        "type": "course",
+        "title": "명동 & 남산 코스",
+        "total_stay_min": 180,
+        "stops": [
+            {
+                "order": 1,
+                "arrival_time": "11:00",
+                "duration_min": 90,
+                "place": {"name": "명동", "place_id": "p1"},
+            },
+            {
+                "order": 2,
+                "arrival_time": "13:00",
+                "duration_min": 90,
+                "place": {"name": "이태원", "place_id": "p2"},
+            },
+        ],
+    }
+    row = {"role": "assistant", "blocks": json.dumps([course_block])}
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[row])
+
+    with patch("src.graph.calendar_node.get_pool", return_value=pool):
+        from src.graph.calendar_node import _load_history_from_db
+
+        result = await _load_history_from_db("test-thread")
+
+    assert len(result) == 1
+    content = result[0]["content"]
+    assert "명동" in content
+    assert "90분" in content
+    assert "180분" in content
+
+
+@pytest.mark.asyncio
+async def test_course_history_end_time_from_total_stay() -> None:
+    """course 히스토리 포함 시 _extract_calendar_fields가 총 체류시간 정보를 수신."""
+    course_block = {
+        "type": "course",
+        "title": "명동 & 남산 코스",
+        "total_stay_min": 180,
+        "stops": [
+            {"order": 1, "arrival_time": "11:00", "duration_min": 90, "place": {"name": "명동", "place_id": "p1"}},
+            {"order": 2, "arrival_time": "13:00", "duration_min": 90, "place": {"name": "이태원", "place_id": "p2"}},
+        ],
+    }
+    db_row = {"role": "assistant", "blocks": json.dumps([course_block])}
+    pool = _make_pool_mock()
+    pool.fetch = AsyncMock(return_value=[db_row])
+
+    captured: dict[str, Any] = {}
+
+    async def mock_extract(pq: Any, history: Any) -> dict[str, Any]:
+        captured["history"] = history
+        return {"event_title": "명동 & 남산 코스", "start_time": _START, "end_time": "2026-05-02T16:00:00+09:00"}
+
+    with (
+        patch(_EXTRACT_PATH, side_effect=mock_extract),
+        patch("src.graph.calendar_node.get_pool", return_value=pool),
+        patch("src.graph.calendar_node.get_settings") as mock_settings,
+        respx.mock,
+    ):
+        mock_settings.return_value.google_calendar_client_id = "cid"
+        mock_settings.return_value.google_calendar_client_secret = "csec"
+        mock_settings.return_value.gemini_llm_api_key = "gkey"
+        respx.post("https://oauth2.googleapis.com/token").mock(
+            return_value=Response(200, json={"access_token": "test-access-token"})
+        )
+        respx.post("https://www.googleapis.com/calendar/v3/calendars/primary/events").mock(
+            return_value=Response(200, json={"htmlLink": _LINK})
+        )
+
+        state: dict[str, Any] = {
+            "user_id": 1,
+            "processed_query": {},
+            "conversation_history": [],
+            "thread_id": "test-thread",
+        }
+        result = await calendar_node(state)  # type: ignore[arg-type]
+
+    # _extract_calendar_fields가 course 체류시간 포함한 히스토리를 받았는지 확인
+    assert captured.get("history"), "history가 전달되지 않음"
+    combined = " ".join(h.get("content", "") for h in captured["history"])
+    assert "90분" in combined, "course 체류시간이 히스토리에 포함되지 않음"
+    assert "180분" in combined, "course 총 체류시간이 히스토리에 포함되지 않음"
+
+    # end_time이 올바르게 반환됐는지 확인 (mock이 16:00 반환)
+    blocks = result["response_blocks"]
+    cal_block = next(b for b in blocks if b["type"] == "calendar")
+    assert cal_block["end_time"] == "2026-05-02T16:00:00+09:00"

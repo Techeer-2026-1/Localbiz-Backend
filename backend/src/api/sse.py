@@ -183,16 +183,28 @@ async def _load_recent_history(pool: Any, thread_id: str) -> list[dict[str, str]
             elif btype == "course" and role == "assistant":
                 title = block.get("title", "")
                 stops = block.get("stops", [])
-                stop_names = []
+                total_stay = block.get("total_stay_min")
+                stop_parts: list[str] = []
                 for stop in stops:
                     if isinstance(stop, dict):
                         place = stop.get("place", {})
                         name = place.get("name", "") if isinstance(place, dict) else ""
                         if name:
-                            stop_names.append(name)
+                            arrival = stop.get("arrival_time", "")
+                            dur = stop.get("duration_min")
+                            entry = name
+                            if arrival:
+                                entry += f" {arrival}"
+                            if dur is not None:
+                                entry += f" {dur}분"
+                            stop_parts.append(entry)
                 label = title or "코스"
-                if stop_names:
-                    parts.append(f"[{label} ({len(stop_names)}곳): {', '.join(stop_names)}]")
+                if stop_parts:
+                    summary = f"[{label} ({len(stop_parts)}곳): {', '.join(stop_parts)}"
+                    if total_stay is not None:
+                        summary += f", 총 체류 {total_stay}분"
+                    summary += "]"
+                    parts.append(summary)
             elif btype == "chart" and role == "assistant":
                 chart_places = block.get("places", [])
                 cnames = [cp.get("name", "") for cp in chart_places if isinstance(cp, dict) and cp.get("name")]
