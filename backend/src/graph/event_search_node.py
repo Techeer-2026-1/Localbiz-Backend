@@ -8,7 +8,8 @@
   4. Rerank 후보 한도 컷 (_MAX_PRERANK) — Naver append 전
   5. PG ∪ OS 병합 < 3건 → Naver 블로그 검색 API fallback (graceful degradation)
   6. LLM Rerank (Gemini Flash — 순위 재배치 + per-event 소개 동시 생성)
-  7. response_blocks: events[] + text_stream(요약) + references[]
+  7. response_blocks: events[] + text_stream(요약)
+     · references 블록은 events 카드 detail_url로 통합 (#200) — FE가 카드 안 하이퍼링크로 렌더링
 
 불변식 #2: event_id == events_vector._id (PG 부재 OS hit는 폐기)
 불변식 #4: PG 2차 보강 쿼리에 is_deleted = FALSE
@@ -600,10 +601,10 @@ def _build_blocks(
     descriptions: list[str],
     pq: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
-    """검색 결과 → events(+description) + text_stream(종합 요약) + references 블록.
+    """검색 결과 → events(+description) + text_stream(종합 요약).
 
     빈 결과(events=[])는 LLM 호출 없이 `_build_empty_blocks`로 즉시 반환 (#151).
-    events 중 source='naver_blog' 항목은 references[] 블록에 추가 노출 (출처 링크).
+    references 블록은 events 카드 detail_url로 통합됨 (#200).
     """
     # 빈 결과는 LLM 호출 없이 정적 안내 1개 (#151)
     if not events:
@@ -676,25 +677,8 @@ def _build_blocks(
         }
     )
 
-    # 3. references 블록 (Naver fallback 결과만 — 출처 링크)
-    references: list[dict[str, Any]] = []
-    for e in events:
-        if e.get("source") == "naver_blog" and e.get("detail_url"):
-            references.append(
-                {
-                    "title": e.get("title", ""),
-                    "url": e["detail_url"],
-                    "source": "naver_blog",
-                }
-            )
-
-    if references:
-        blocks.append(
-            {
-                "type": "references",
-                "items": references,
-            }
-        )
+    # references 블록 제거 (#200) — events 카드와 동일 정보가 중복 표시되던 UX 회귀.
+    # events 카드의 detail_url + source 필드는 유지 — FE가 카드 클릭/상단 하이퍼링크로 통합 렌더링.
 
     return blocks
 
@@ -793,7 +777,7 @@ async def event_search_node(state: dict[str, Any]) -> dict[str, Any]:
         state: AgentState dict (query, processed_query 등).
 
     Returns:
-        {"response_blocks": [events, text_stream, references?]}.
+        {"response_blocks": [events, text_stream]}.
     """
     previous_blocks = state.get("previous_blocks")
     refinement = state.get("refinement")
