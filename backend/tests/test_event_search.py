@@ -121,7 +121,7 @@ async def test_build_blocks_with_db_events_only() -> None:
 
 
 async def test_build_blocks_with_naver_fallback() -> None:
-    """Naver fallback 결과 포함 시: references 블록 추가."""
+    """Naver fallback 결과 포함 시 — events 카드 안 detail_url/source 유지, references 블록 미전송 (#200)."""
     from src.graph.event_search_node import _build_blocks  # pyright: ignore[reportMissingImports]
 
     merged = _DB_EVENTS + _NAVER_EVENTS
@@ -130,17 +130,19 @@ async def test_build_blocks_with_naver_fallback() -> None:
     block_types = [b["type"] for b in blocks]
     assert "text_stream" in block_types
     assert "events" in block_types
-    assert "references" in block_types
+    # #200: references 블록 미전송 — Naver 결과의 detail_url은 events 카드에 그대로 포함
+    assert "references" not in block_types
 
-    # references는 Naver 결과만 포함
-    refs_block = next(b for b in blocks if b["type"] == "references")
-    assert len(refs_block["items"]) == 1
-    assert refs_block["items"][0]["url"] == "https://blog.naver.com/example"
-    assert refs_block["items"][0]["source"] == "naver_blog"
+    events_block = next(b for b in blocks if b["type"] == "events")
+    items = events_block["items"]
+    # Naver 결과가 events 카드 안에 detail_url + source 유지
+    naver_items = [i for i in items if i.get("source") == "naver_blog"]
+    assert len(naver_items) == 1
+    assert naver_items[0]["detail_url"] == "https://blog.naver.com/example"
 
 
 async def test_build_blocks_empty_results() -> None:
-    """검색 결과 0건: text 블록만 생성 (text_stream/events/references 없음). #151."""
+    """검색 결과 0건: text 블록만 생성 (text_stream/events 없음). #151."""
     from src.graph.event_search_node import _build_blocks  # pyright: ignore[reportMissingImports]
 
     blocks = _build_blocks("결과 없는 쿼리", [], [], pq=None)
