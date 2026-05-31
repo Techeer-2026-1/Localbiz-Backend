@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -69,23 +70,26 @@ async def list_calendar_events(
     effective_time_min = time_min or now.isoformat()
     effective_time_max = time_max or (now + timedelta(days=90)).isoformat()
 
-    params: dict[str, Any] = {
+    base_params: dict[str, Any] = {
         "timeMin": effective_time_min,
         "timeMax": effective_time_max,
         "maxResults": limit,
         "singleEvents": "true",
         "orderBy": "startTime",
-        "privateExtendedProperty": "source=localbiz",
     }
     if page_token:
-        params["pageToken"] = page_token
+        base_params["pageToken"] = page_token
+
+    # privateExtendedProperty 값의 '='를 httpx가 %3D로 인코딩하면 Google이 필터를 인식 못함.
+    # urlencode로 나머지 파라미터를 직접 조립하고 raw로 append.
+    query_string = urlencode(base_params) + "&privateExtendedProperty=source=localbiz"
+    url = f"{_GOOGLE_EVENTS_URL}?{query_string}"
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
-                _GOOGLE_EVENTS_URL,
+                url,
                 headers={"Authorization": f"Bearer {access_token}"},
-                params=params,
             )
     except httpx.RequestError as e:
         logger.warning("calendar: events.list 네트워크 오류 user_id=%s: %s", user_id, e)
