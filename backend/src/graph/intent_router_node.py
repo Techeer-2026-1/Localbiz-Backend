@@ -102,7 +102,15 @@ Phase 1 (active):
 - BOOKING: requesting a reservation or booking link
 - CALENDAR: adding an event to calendar
 - FAVORITE: bookmarking or favoriting something
-- REVIEW_COMPARE: comparing two or more places by 6 metrics (satisfaction/accessibility/cleanliness/value/atmosphere/expertise)
+- REVIEW_COMPARE: comparing two or more places by 6 metrics (satisfaction/accessibility/cleanliness/value/atmosphere/expertise).
+  Trigger keywords REQUIRED: "비교", "리뷰 비교", "어디가 더", "어느 쪽이", "어느 게 더", "더 좋아".
+  Without these explicit comparison keywords, classify as DETAIL_INQUIRY or GENERAL even if
+  multiple places are mentioned (Korean connectors like "이랑", "와", "과", "vs" alone are NOT enough).
+  NOT REVIEW_COMPARE (classify accordingly):
+    - "A랑 B 어디야?" / "A와 B 어디냐?" → GENERAL or DETAIL_INQUIRY (location query)
+    - "A 그리고 B 가격" → COST_ESTIMATE (price query)
+    - "A하고 B 영업시간" → DETAIL_INQUIRY (info query)
+  Example REVIEW_COMPARE: "물포곤 청담점이랑 광화문점 리뷰 비교해줘" / "강남역과 홍대 카페 어느 게 더 좋아?"
 - CROWDEDNESS: asking about current crowdedness, busyness, or population density of an area.
   Accept noun-phrase queries without verbs (e.g. "홍대 혼잡도", "강남 사람 많아?", "지금 이태원").
   Trigger keywords: "혼잡", "혼잡도", "붐비", "사람 많", "사람 적", "한산", "유동인구", "생활인구", "지금 ~ 어때".
@@ -142,7 +150,11 @@ Phase 1 (active):
 - BOOKING: requesting a reservation or booking link
 - CALENDAR: adding an event to calendar
 - FAVORITE: bookmarking or favoriting something
-- REVIEW_COMPARE: comparing two or more places by 6 metrics
+- REVIEW_COMPARE: comparing two or more places by 6 metrics.
+  Trigger keywords REQUIRED: "비교", "리뷰 비교", "어디가 더", "어느 쪽이", "어느 게 더", "더 좋아".
+  Without these explicit comparison keywords, classify as DETAIL_INQUIRY or GENERAL even if
+  multiple places are mentioned (Korean connectors like "이랑", "와", "과", "vs" alone are NOT enough).
+  NOT REVIEW_COMPARE: "A랑 B 어디야?" → GENERAL/DETAIL_INQUIRY, "A 그리고 B 가격" → COST_ESTIMATE.
 - CROWDEDNESS: asking about current crowdedness, busyness, or population density of an area.
   Accept noun-phrase queries without verbs (e.g. "홍대 혼잡도", "강남 사람 많아?", "지금 이태원").
   Trigger keywords: "혼잡", "혼잡도", "붐비", "사람 많", "사람 적", "한산", "유동인구", "생활인구", "지금 ~ 어때".

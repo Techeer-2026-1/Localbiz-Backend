@@ -32,6 +32,8 @@ _EXPECTED_BLOCK_ORDER: dict[str, list[str]] = {
     "EVENT_RECOMMEND": ["intent", "events", "text_stream", "done"],
     "COURSE_PLAN": ["intent", "text_stream", "course", "done"],
     "DETAIL_INQUIRY": ["intent", "text_stream", "done"],
+    # 기획서 §4.5: chart 누락 silent 회귀 방지 — 신규 ChartBlock 의존 패널 추적용.
+    "REVIEW_COMPARE": ["intent", "text_stream", "chart", "analysis_sources", "done"],
 }
 
 # 선택적 블록 — 있어도 되고 없어도 되는 블록 (순서 검증에서 제외)
