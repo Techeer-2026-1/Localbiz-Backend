@@ -29,8 +29,9 @@ async def init_os_client() -> AsyncOpenSearch:
         verify_certs=False,
         ssl_show_warn=False,
         # 검색 타임아웃(초) — 빠른 실패 후 PG fallback 유도 (#124 안정성 고도화).
+        # P0-3 (로드맵 §1): 7→5초 단축. OS spike 시 PG fallback이 더 빠르게 동작.
         # max_retries=0: 클라이언트 내장 재시도를 끄고 재시도는 호출부 with_retry에 위임.
-        timeout=7,
+        timeout=5,
         max_retries=0,
     )
     return _client
