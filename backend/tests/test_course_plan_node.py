@@ -318,7 +318,7 @@ async def test_build_blocks_normal() -> None:
         },
     ]
 
-    blocks = _build_blocks("종로 코스", _PLACES, "도심 코스", "3곳 코스", stop_details, "test-uuid")
+    blocks = await _build_blocks("종로 코스", _PLACES, "도심 코스", "3곳 코스", stop_details, "test-uuid")
     types = [b["type"] for b in blocks]
 
     assert "text_stream" in types
@@ -347,7 +347,7 @@ async def test_build_blocks_empty() -> None:
     """빈 결과 → text_stream만 + 빈 course 블록."""
     from src.graph.course_plan_node import _build_blocks  # pyright: ignore[reportMissingImports]
 
-    blocks = _build_blocks("없는 코스", [], None, None, [], "test-uuid")
+    blocks = await _build_blocks("없는 코스", [], None, None, [], "test-uuid")
     types = [b["type"] for b in blocks]
     assert "text_stream" in types
     assert "course" in types
@@ -362,7 +362,7 @@ async def test_build_blocks_single_stop() -> None:
         {"order": 1, "arrival_time": "11:00", "duration_min": 60, "recommendation_reason": "시장", "transit_mode": None}
     ]
 
-    blocks = _build_blocks("시장 코스", single, "시장 코스", "1곳", details, "test-uuid")
+    blocks = await _build_blocks("시장 코스", single, "시장 코스", "1곳", details, "test-uuid")
     course = next(b for b in blocks if b["type"] == "course")
     assert len(course["stops"]) == 1
     assert course["stops"][0]["transit_to_next"] is None
