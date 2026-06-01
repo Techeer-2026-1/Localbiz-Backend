@@ -3,7 +3,7 @@
 Intent Router 직후, 모든 검색 기능 공통으로 실행.
 Gemini 2.5 Flash JSON mode로 카테고리/지역/키워드 추출.
 
-GENERAL intent는 전처리 불필요 → 빈 dict 반환.
+_SKIP_INTENTS(GENERAL, IMAGE_SEARCH, CALENDAR, REFINE, BOOKING, COST_ESTIMATE, CROWDEDNESS)는 전처리 불필요 → 빈 dict 반환.
 Gemini 실패 시 빈 dict fallback (검색 노드가 원본 query로 동작).
 """
 
@@ -22,9 +22,25 @@ logger = logging.getLogger(__name__)
 # ISO date "YYYY-MM-DD" 형식 검증 정규식 (Gemini 응답 후처리)
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-# 전처리 생략 대상 intent — GENERAL(대화형) + IMAGE_SEARCH(URL 쿼리, 이미지 노드가 직접 파싱)
-# NOTE: REFINE은 전처리 필요 (new_condition 파싱, district/category 추출에 활용)
-_SKIP_INTENTS: frozenset[str] = frozenset({"GENERAL", "IMAGE_SEARCH"})
+# 전처리 생략 대상 intent (최적화_로드맵_2026-06-01 §1 P0-1):
+# - GENERAL: 대화형, 검색 필드 불필요
+# - IMAGE_SEARCH: URL/이미지 쿼리, 이미지 노드가 직접 파싱
+# - CALENDAR: P1-4 정규식 backstop 도입 전제. 시간 표현은 raw query에서 LLM이 자체 파싱
+# - REFINE: 자체 LLM identify/parse 사용, processed_query 미참조
+# - BOOKING: place_name/category는 raw query에서 자체 추출
+# - COST_ESTIMATE: raw query만으로 견적 가능 (district/category 폴백 기본값 사용)
+# - CROWDEDNESS: raw query만으로 동작
+_SKIP_INTENTS: frozenset[str] = frozenset(
+    {
+        "GENERAL",
+        "IMAGE_SEARCH",
+        "CALENDAR",
+        "REFINE",
+        "BOOKING",
+        "COST_ESTIMATE",
+        "CROWDEDNESS",
+    }
+)
 
 _PREPROCESS_SYSTEM_PROMPT = """\
 You are a query preprocessor for a Seoul local-life AI chatbot.

@@ -24,6 +24,34 @@ async def test_general_intent_returns_empty() -> None:
     assert result["processed_query"] == {}
 
 
+# P0-1 회귀 테스트: 확장된 _SKIP_INTENTS가 LLM 호출 없이 빈 dict 반환하는지 검증
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skip_intent",
+    ["IMAGE_SEARCH", "CALENDAR", "REFINE", "BOOKING", "COST_ESTIMATE", "CROWDEDNESS"],
+)
+async def test_skip_intents_return_empty_without_llm(skip_intent: str) -> None:
+    """확장된 _SKIP_INTENTS 6종 → 빈 dict + LLM 분기 미진입.
+
+    skip 경로는 LLM 코드에 도달하기 전에 return 되어야 한다.
+    `date.today()`는 LLM 분기 진입 직후 호출되므로 그것이 호출되지 않음을 검증해
+    skip 경로 단축 회로를 간접적으로 입증한다.
+    """
+    from src.graph.query_preprocessor_node import query_preprocessor_node  # pyright: ignore[reportMissingImports]
+
+    with patch("src.graph.query_preprocessor_node.date") as mock_date_mod:
+        mock_date_mod.today.side_effect = AssertionError("skip 경로가 LLM 분기로 진입함")
+
+        state: dict[str, Any] = {
+            "query": "임의 쿼리",
+            "intent": skip_intent,
+        }
+        result = await query_preprocessor_node(state)
+
+        assert result["processed_query"] == {}
+        mock_date_mod.today.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_normal_query_extracts_fields() -> None:
     """검색 쿼리 → Gemini mock 응답에서 8필드 추출."""
