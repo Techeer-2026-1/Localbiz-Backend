@@ -589,7 +589,7 @@ def _apply_fallback_times(route: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # ⑤ 블록 생성
 # ---------------------------------------------------------------------------
-def _build_blocks(
+async def _build_blocks(
     query: str,
     route: list[dict[str, Any]],
     title: Optional[str],
@@ -714,21 +714,29 @@ def _build_blocks(
                 }
             )
 
+    from src.utils.osrm import fetch_segment as _osrm_fetch  # pyright: ignore[reportMissingImports]
+    from src.utils.osrm import is_enabled as _osrm_enabled  # pyright: ignore[reportMissingImports]
+
     segments: list[dict[str, Any]] = []
+    polyline_type = "straight"
     for i in range(len(route) - 1):
         p1 = route[i]
         p2 = route[i + 1]
         if p1.get("lat") is not None and p2.get("lat") is not None:
             detail = stop_details[i] if i < len(stop_details) else {}
+            # P3-B: OSRM_URL 설정 시 도로 polyline, 실패/미설정 시 직선 fallback
+            coords: list[list[float]] = [[p1["lng"], p1["lat"]], [p2["lng"], p2["lat"]]]
+            if _osrm_enabled():
+                osrm_coords = await _osrm_fetch(p1["lng"], p1["lat"], p2["lng"], p2["lat"])
+                if osrm_coords:
+                    coords = osrm_coords
+                    polyline_type = "road"
             segments.append(
                 {
                     "from_order": i + 1,
                     "to_order": i + 2,
                     "mode": detail.get("transit_mode", "walk") or "walk",
-                    "coordinates": [
-                        [p1["lng"], p1["lat"]],  # GeoJSON [lng, lat]
-                        [p2["lng"], p2["lat"]],
-                    ],
+                    "coordinates": coords,
                 }
             )
 
@@ -748,7 +756,7 @@ def _build_blocks(
                 "center": {"lat": sum(lats) / len(lats), "lng": sum(lngs) / len(lngs)},
                 "suggested_zoom": 14,
                 "markers": markers,
-                "polyline": {"type": "straight", "segments": segments},
+                "polyline": {"type": polyline_type, "segments": segments},
             }
         )
 
@@ -1097,7 +1105,7 @@ async def course_plan_node(state: dict[str, Any]) -> dict[str, Any]:
 
     # ⑤ 블록 생성
     course_id = str(uuid.uuid4())
-    blocks = _build_blocks(query, route, title, description, stop_details, course_id)
+    blocks = await _build_blocks(query, route, title, description, stop_details, course_id)
 
     logger.info(
         "course_plan: categories=%s, candidates=%d, reranked→route=%d stops",
