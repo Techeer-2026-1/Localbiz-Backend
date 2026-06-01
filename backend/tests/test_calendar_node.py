@@ -271,6 +271,7 @@ async def test_conversation_history_forwarded_to_extractor() -> None:
     async def mock_extract(
         pq: Any,
         history: Any,
+        query: str = "",
     ) -> dict[str, Any]:
         captured["pq"] = pq
         captured["history"] = history
@@ -370,7 +371,7 @@ async def test_course_history_end_time_from_total_stay() -> None:
 
     captured: dict[str, Any] = {}
 
-    async def mock_extract(pq: Any, history: Any) -> dict[str, Any]:
+    async def mock_extract(pq: Any, history: Any, query: str = "") -> dict[str, Any]:
         captured["history"] = history
         return {"event_title": "명동 & 남산 코스", "start_time": _START, "end_time": "2026-05-02T16:00:00+09:00"}
 
