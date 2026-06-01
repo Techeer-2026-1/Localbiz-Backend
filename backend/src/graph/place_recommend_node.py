@@ -23,6 +23,8 @@ import asyncio
 import logging
 from typing import Any, Optional
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 _RECOMMEND_SYSTEM_PROMPT = (
@@ -647,6 +649,7 @@ async def _handle_refinement(
     return {"response_blocks": blocks}
 
 
+@traced_node("place_recommend")
 async def place_recommend_node(state: dict[str, Any]) -> dict[str, Any]:
     """PLACE_RECOMMEND 노드 — PG + OS 2채널 + LLM Rerank (Phase 1).
 

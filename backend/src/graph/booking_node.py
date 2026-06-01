@@ -14,6 +14,7 @@ from typing import Any, Optional
 from cachetools import TTLCache
 
 from src.config import get_settings  # pyright: ignore[reportMissingImports]
+from src.graph._tracing import traced_call, traced_node  # pyright: ignore[reportMissingImports]
 from src.graph.state import AgentState  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ _BOOKING_SYSTEM = (
 )
 
 
+@traced_node("booking")
 async def booking_node(state: AgentState) -> dict[str, Any]:
     """BOOKING intent 노드.
 
@@ -97,13 +99,18 @@ async def _search_booking_info(
     prompt = f"{_BOOKING_SYSTEM}\n\n사용자가 '{place_name}'{cat_ctx}{date_ctx} 예약을 원해."
 
     try:
-        resp = await client.aio.models.generate_content(
+        async with traced_call(
+            "gemini.booking_grounding",
             model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-            ),
-        )
+            purpose="booking_grounding",
+        ):
+            resp = await client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                ),
+            )
         return resp.text or f"'{place_name}' 예약 정보를 찾지 못했어요. 직접 검색하거나 전화 문의해 주세요."
     except Exception:
         logger.warning("booking_node: grounding 실패 place=%s", place_name)

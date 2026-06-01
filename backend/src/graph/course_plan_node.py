@@ -24,6 +24,8 @@ import math
 import uuid
 from typing import Any, Optional
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 _COURSE_SYSTEM_PROMPT = (
@@ -1025,6 +1027,7 @@ async def _handle_refinement(
     return {"response_blocks": blocks}
 
 
+@traced_node("course_plan")
 async def course_plan_node(state: dict[str, Any]) -> dict[str, Any]:
     """COURSE_PLAN 노드 — 카테고리별 병렬 검색 → Greedy NN → LLM 코스 구성 (Phase 1).
 

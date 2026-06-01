@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 _DETAIL_INQUIRY_SYSTEM_PROMPT = (
@@ -181,6 +183,7 @@ async def _fetch_place(
 # ---------------------------------------------------------------------------
 # LangGraph 노드
 # ---------------------------------------------------------------------------
+@traced_node("detail_inquiry")
 async def detail_inquiry_node(state: dict[str, Any]) -> dict[str, Any]:
     """DETAIL_INQUIRY 노드 — 장소 상세 단건 조회 + Gemini 소개.
 

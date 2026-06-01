@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 _PLACE_SEARCH_SYSTEM_PROMPT = (
@@ -465,6 +467,7 @@ async def _handle_refinement(
     return {"response_blocks": blocks}
 
 
+@traced_node("place_search")
 async def place_search_node(state: dict[str, Any]) -> dict[str, Any]:
     """PLACE_SEARCH 노드 — PG + OS 하이브리드 검색.
 

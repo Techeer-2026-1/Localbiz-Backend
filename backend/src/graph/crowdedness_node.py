@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 _STALE_THRESHOLD_DAYS = 3
@@ -214,6 +216,7 @@ async def fetch_congestion_by_district(
     }
 
 
+@traced_node("crowdedness")
 async def crowdedness_node(state: dict[str, Any]) -> dict[str, Any]:
     """CROWDEDNESS intent 처리 노드. Phase: P1."""
     from src.db.postgres import get_pool  # pyright: ignore[reportMissingImports]

@@ -42,6 +42,7 @@ import re
 from datetime import date
 from typing import Any, Optional
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
 from src.graph.event_filters import is_real_event  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
@@ -737,6 +738,7 @@ async def _handle_refinement(
     return {"response_blocks": blocks}
 
 
+@traced_node("event_recommend")
 async def event_recommend_node(state: dict[str, Any]) -> dict[str, Any]:
     """EVENT_RECOMMEND 노드 — PG 정형 + OS k-NN + LLM Rerank 행사 추천 (Phase 1).
 

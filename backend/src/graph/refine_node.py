@@ -25,6 +25,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 
@@ -397,6 +399,7 @@ def _no_previous_response_blocks() -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # LangGraph 노드
 # ---------------------------------------------------------------------------
+@traced_node("refine")
 async def refine_node(state: dict[str, Any]) -> dict[str, Any]:
     """REFINE 노드 — 수정 요청 파싱 + 원본 노드 재호출.
 
