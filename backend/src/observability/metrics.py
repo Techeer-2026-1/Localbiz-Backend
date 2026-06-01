@@ -56,6 +56,14 @@ langgraph_llm_latency_seconds = Histogram(
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0),
 )
 
+# P3-D: Gemini 토큰 → USD 환산 누적 비용 메트릭
+# 토큰 단가는 환경변수로 분리 — 가격 변동 시 재배포 없이 조정.
+langgraph_llm_cost_usd_total = Counter(
+    "langgraph_llm_cost_usd_total",
+    "LLM 호출 누적 비용 (USD). 토큰 단가 × 토큰 수.",
+    ["model", "purpose", "direction"],
+)
+
 # ---------------------------------------------------------------------------
 # OpenSearch / PostgreSQL
 # ---------------------------------------------------------------------------

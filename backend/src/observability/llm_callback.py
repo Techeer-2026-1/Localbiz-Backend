@@ -16,6 +16,7 @@ ContextVar 미설정 시 fallback `"unknown"`.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from contextvars import ContextVar
 from typing import Any, Optional
@@ -27,9 +28,15 @@ from langchain_core.outputs import LLMResult  # pyright: ignore[reportMissingImp
 
 from src.observability.metrics import (
     langgraph_llm_calls_total,
+    langgraph_llm_cost_usd_total,
     langgraph_llm_latency_seconds,
     langgraph_llm_tokens_total,
 )
+
+# P3-D: Gemini 토큰 → USD 환산. 환경변수로 단가 조정.
+# 기본값은 gemini-2.5-flash 공식 단가 (per 1M tokens, 2026 기준).
+_GEMINI_USD_PER_M_INPUT = float(os.environ.get("GEMINI_COST_USD_PER_M_INPUT", "0.075"))
+_GEMINI_USD_PER_M_OUTPUT = float(os.environ.get("GEMINI_COST_USD_PER_M_OUTPUT", "0.30"))
 
 logger = logging.getLogger(__name__)
 
@@ -145,8 +152,15 @@ class LLMMetricsCallback(BaseCallbackHandler):
         in_tok, out_tok = _extract_token_counts(response)
         if in_tok > 0:
             langgraph_llm_tokens_total.labels(model=model, purpose=purpose, direction="input").inc(in_tok)
+            # P3-D: USD 환산 누적 (per 1M tokens 단가)
+            langgraph_llm_cost_usd_total.labels(model=model, purpose=purpose, direction="input").inc(
+                in_tok * _GEMINI_USD_PER_M_INPUT / 1_000_000
+            )
         if out_tok > 0:
             langgraph_llm_tokens_total.labels(model=model, purpose=purpose, direction="output").inc(out_tok)
+            langgraph_llm_cost_usd_total.labels(model=model, purpose=purpose, direction="output").inc(
+                out_tok * _GEMINI_USD_PER_M_OUTPUT / 1_000_000
+            )
 
     def on_llm_error(
         self,
