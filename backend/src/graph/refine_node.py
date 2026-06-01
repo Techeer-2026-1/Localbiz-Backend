@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Optional
 
 from pydantic import BaseModel
@@ -44,6 +45,40 @@ class RefinementInstruction(BaseModel):
 
 
 _VALID_ACTIONS = frozenset({"replace", "remove", "add", "change_condition", "regenerate"})
+
+# P1-3: 정규식 prefilter — 명확 수정 지시는 LLM 호출 skip
+_REGEX_REMOVE = re.compile(r"(?P<idx>[1-9]\d?)\s*번\s*(빼|삭제|제거|지워)")
+_REGEX_REPLACE = re.compile(r"(?P<idx>[1-9]\d?)\s*번\s*(바꿔|교체|변경)")
+_REGEX_ADD = re.compile(r"(하나\s*더|한\s*개\s*더|추가해)")
+_REGEX_REGENERATE = re.compile(r"(다시\s*(해|만들)|마음에\s*안|별로|싫어|새로)")
+
+
+def _try_regex_parse(query: str) -> Optional[RefinementInstruction]:
+    """명확 수정 패턴을 정규식으로 직접 파싱. 매치 안 되면 None → LLM 위임."""
+    m = _REGEX_REMOVE.search(query)
+    if m:
+        return RefinementInstruction(
+            action="remove",
+            target_index=int(m.group("idx")),
+            full_instruction=query,
+        )
+
+    m = _REGEX_REPLACE.search(query)
+    if m:
+        return RefinementInstruction(
+            action="replace",
+            target_index=int(m.group("idx")),
+            full_instruction=query,
+        )
+
+    if _REGEX_ADD.search(query):
+        return RefinementInstruction(action="add", full_instruction=query)
+
+    if _REGEX_REGENERATE.search(query):
+        return RefinementInstruction(action="regenerate", full_instruction=query)
+
+    return None
+
 
 # 구조화 블록 → 원본 intent 매핑
 _BLOCK_TYPE_TO_INTENT: dict[str, str] = {
@@ -285,8 +320,19 @@ async def _parse_refinement(
 ) -> RefinementInstruction:
     """Gemini JSON mode로 수정 지시 파싱.
 
+    P1-3: 명확 패턴은 정규식으로 직접 파싱 (LLM 호출 skip).
     실패 시 regenerate fallback.
     """
+    # P1-3: 정규식 prefilter
+    regex_result = _try_regex_parse(query)
+    if regex_result is not None:
+        logger.info(
+            "refine_node: regex parsed action=%s target_index=%s (LLM skip)",
+            regex_result.action,
+            regex_result.target_index,
+        )
+        return regex_result
+
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI  # pyright: ignore[reportMissingImports]
 

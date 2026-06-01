@@ -239,3 +239,48 @@ async def test_identify_target_skips_refine_self_response_for_course() -> None:
     # (명시적 참조 없으니 가장 최근 refineable = CALENDAR가 target.)
     assert intent == "CALENDAR"
     assert target is calendar_resp
+
+
+# ---------------------------------------------------------------------------
+# P1-3: _try_regex_parse — 정규식 prefilter
+# ---------------------------------------------------------------------------
+def test_regex_parse_remove() -> None:
+    from src.graph.refine_node import _try_regex_parse  # pyright: ignore[reportMissingImports]
+
+    r = _try_regex_parse("3번 빼줘")
+    assert r is not None
+    assert r.action == "remove"
+    assert r.target_index == 3
+
+
+def test_regex_parse_replace() -> None:
+    from src.graph.refine_node import _try_regex_parse  # pyright: ignore[reportMissingImports]
+
+    r = _try_regex_parse("2번 바꿔줘")
+    assert r is not None
+    assert r.action == "replace"
+    assert r.target_index == 2
+
+
+def test_regex_parse_regenerate() -> None:
+    from src.graph.refine_node import _try_regex_parse  # pyright: ignore[reportMissingImports]
+
+    r = _try_regex_parse("다시 해줘")
+    assert r is not None
+    assert r.action == "regenerate"
+
+
+def test_regex_parse_add() -> None:
+    from src.graph.refine_node import _try_regex_parse  # pyright: ignore[reportMissingImports]
+
+    r = _try_regex_parse("하나 더 추가해줘")
+    assert r is not None
+    assert r.action == "add"
+
+
+def test_regex_parse_no_match() -> None:
+    """모호 패턴은 None → LLM 위임."""
+    from src.graph.refine_node import _try_regex_parse  # pyright: ignore[reportMissingImports]
+
+    assert _try_regex_parse("강남 말고 홍대로 바꿔") is None  # 'N번' 없음
+    assert _try_regex_parse("좀 다른 거 보여줘") is None
