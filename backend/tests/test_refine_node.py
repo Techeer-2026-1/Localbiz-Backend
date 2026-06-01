@@ -199,13 +199,14 @@ def test_filter_refineable_all_refine_returns_empty() -> None:
     assert intents == []
 
 
-def test_identify_target_skips_refine_self_response_for_course() -> None:
-    """가장 최근 응답이 REFINE 자기응답이어도 그 다음 course 응답을 target으로 잡음.
+async def test_identify_target_skips_refine_self_response_for_course() -> None:
+    """가장 최근 응답이 REFINE 자기응답이어도 그 다음 refineable 응답을 target으로 잡음.
 
     #212 핵심 회귀 — DB 관측 사례 그대로 재현.
-    """
-    import asyncio
 
+    asyncio.run()을 쓰면 세션 event_loop fixture를 닫아 후속 sync 테스트가
+    'no current event loop'으로 깨지므로 async test로 작성 — pytest-asyncio auto mode가 처리.
+    """
     from src.graph.refine_node import _identify_target
 
     refine_failure = [
@@ -227,12 +228,10 @@ def test_identify_target_skips_refine_self_response_for_course() -> None:
         {"type": "map_route"},
     ]
 
-    target, intent = asyncio.run(
-        _identify_target(
-            query="홍대씨앤이 마음에 들지 않아, 다른 팝업 스토어로 바꿔줘",
-            all_assistant_blocks=[refine_failure, calendar_resp, course_resp],
-            conversation_history=[],
-        )
+    target, intent = await _identify_target(
+        query="홍대씨앤이 마음에 들지 않아, 다른 팝업 스토어로 바꿔줘",
+        all_assistant_blocks=[refine_failure, calendar_resp, course_resp],
+        conversation_history=[],
     )
 
     # CALENDAR가 가장 최근 refineable이지만 plan 의도가 course 쪽이라 caller의 _parse_refinement가
