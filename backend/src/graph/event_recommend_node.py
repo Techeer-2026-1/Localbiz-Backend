@@ -44,6 +44,7 @@ from typing import Any, Optional
 
 from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
 from src.graph.event_filters import is_real_event  # pyright: ignore[reportMissingImports]
+from src.observability.metrics import langgraph_fallback_total  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
@@ -810,6 +811,7 @@ async def event_recommend_node(state: dict[str, Any]) -> dict[str, Any]:
     # 4) PG∪OS 병합 부족 시 Naver fallback
     naver_events: list[dict[str, Any]] = []
     if merged_count < _MIN_MERGED_RESULTS:
+        langgraph_fallback_total.labels(path="event_recommend.naver_sparse").inc()
         naver_query = " ".join(keywords) if keywords else query[:100]
         naver_items = await _search_naver(
             naver_query,

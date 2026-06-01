@@ -11,6 +11,7 @@ from enum import StrEnum  # pyright: ignore[reportAttributeAccessIssue]
 from typing import Any, Optional
 
 from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+from src.observability.metrics import langgraph_fallback_total  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,7 @@ async def classify_intents(
     settings = get_settings()
     if not settings.gemini_llm_api_key:
         logger.warning("classify_intents: GEMINI_LLM_API_KEY 미설정 → GENERAL fallback")
+        langgraph_fallback_total.labels(path="intent.no_llm_key").inc()
         return [(_GENERAL_FALLBACK, 0.0, query)]
 
     try:
@@ -298,6 +300,7 @@ async def classify_intent(
     settings = get_settings()
     if not settings.gemini_llm_api_key:
         logger.warning("classify_intent: GEMINI_LLM_API_KEY 미설정 → GENERAL fallback")
+        langgraph_fallback_total.labels(path="intent.no_llm_key").inc()
         return (_GENERAL_FALLBACK, 0.0)
 
     try:

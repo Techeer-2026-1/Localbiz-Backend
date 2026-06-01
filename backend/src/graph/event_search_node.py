@@ -36,6 +36,7 @@ from typing import Any, Optional
 
 from src.graph._tracing import traced_call, traced_node  # pyright: ignore[reportMissingImports]
 from src.graph.event_filters import is_real_event  # pyright: ignore[reportMissingImports]
+from src.observability.metrics import langgraph_fallback_total  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
@@ -838,6 +839,7 @@ async def event_search_node(state: dict[str, Any]) -> dict[str, Any]:
     # 4) PG∪OS 병합 부족 시 Naver fallback
     naver_events: list[dict[str, Any]] = []
     if merged_count < _MIN_MERGED_RESULTS:
+        langgraph_fallback_total.labels(path="event.naver_sparse").inc()
         # 검색어 조합: keywords 우선, 없으면 query 자체 (앞 100자)
         naver_query = " ".join(keywords) if keywords else query[:100]
         naver_items = await _search_naver(
