@@ -32,6 +32,11 @@ from src.models.blocks import (  # pyright: ignore[reportMissingImports]
     StatusFrame,
     serialize_block,
 )
+from src.observability.context import (  # pyright: ignore[reportMissingImports]
+    request_id_var,
+    thread_id_var,
+    user_id_var,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -305,13 +310,23 @@ async def chat_stream(
     """
 
     async def event_generator() -> AsyncIterator[str]:
+        import uuid
+
         from src.db.postgres import get_pool  # pyright: ignore[reportMissingImports]
         from src.graph.real_builder import build_graph  # pyright: ignore[reportMissingImports]
 
+        # request 단위 식별자 + thread/user 컨텍스트를 ContextVar로 주입 → 모든 로그·span에 자동 부착.
+        # finally 블록에서 reset — async leak 회피.
+        request_id = str(uuid.uuid4())
+        rid_token = request_id_var.set(request_id)
+        tid_token = thread_id_var.set(thread_id)
+        uid_token = user_id_var.set(None)  # JWT 디코드 후 갱신
+
         logger.info(
-            "SSE stream started: thread_id=%s, query_len=%d",
+            "SSE stream started: thread_id=%s, query_len=%d, request_id=%s",
             thread_id,
             len(query),
+            request_id,
         )
 
         try:
@@ -326,6 +341,9 @@ async def chat_stream(
 
                 payload = decode_access_token(token)
                 user_id = int(payload["sub"])
+                # JWT 디코드 성공 후 user_id ContextVar 갱신.
+                user_id_var.reset(uid_token)
+                uid_token = user_id_var.set(user_id)
             except Exception:
                 logger.info("SSE JWT decode failed: thread_id=%s", thread_id)
                 _msg = "유효하지 않은 인증 토큰입니다. 다시 로그인해 주세요."
@@ -534,6 +552,20 @@ async def chat_stream(
             _msg = "서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
             yield format_error_event("INTERNAL_ERROR", _msg, recoverable=True)
             yield format_done_event(status="error", error_message=_msg)
+        finally:
+            # ContextVar reset — async-leak 회피 (다음 요청에 누설되지 않도록).
+            try:
+                user_id_var.reset(uid_token)
+            except ValueError:
+                pass  # 이미 reset된 경우(중복 reset 시 ValueError) silent.
+            try:
+                thread_id_var.reset(tid_token)
+            except ValueError:
+                pass
+            try:
+                request_id_var.reset(rid_token)
+            except ValueError:
+                pass
 
     return StreamingResponse(
         event_generator(),
