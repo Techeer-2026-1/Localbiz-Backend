@@ -50,3 +50,18 @@ async def close_pool() -> None:
     if _pool is not None:
         await _pool.close()
         _pool = None
+
+
+def get_pool_in_use_count() -> int:
+    """현재 사용 중인 커넥션 수 = total - idle. 풀 미초기화 시 0.
+
+    Prometheus `langgraph_pg_pool_in_use` Gauge를 주기 task에서 이 함수로 갱신.
+    """
+    if _pool is None:
+        return 0
+    try:
+        size = _pool.get_size()
+        idle = _pool.get_idle_size()
+        return max(0, size - idle)
+    except Exception:
+        return 0
