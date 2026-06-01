@@ -33,6 +33,7 @@ import re
 from typing import Any, Optional
 
 from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+from src.observability.metrics import langgraph_fallback_total  # pyright: ignore[reportMissingImports]
 
 _URL_RE = re.compile(r"https?://\S+")
 # "여기 어딘지" 류 — 특정 장소 식별 의도
@@ -656,6 +657,7 @@ async def _fallback_knn_with_message(
     place_type: Optional[str],
 ) -> list[dict[str, Any]]:
     """못 찾은 경우 커스텀 메시지 + k-NN 결과 반환. scene_description 없으면 메시지만."""
+    langgraph_fallback_total.labels(path="image.knn_scene_fallback").inc()
     if not scene_description:
         return [_text_stream_block(msg_prompt)]
     knn_blocks = await _run_knn(scene_description, api_key, pool, os_client, place_type=place_type)
