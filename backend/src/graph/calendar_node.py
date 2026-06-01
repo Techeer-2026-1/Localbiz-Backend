@@ -175,7 +175,8 @@ async def calendar_node(state: AgentState) -> dict[str, Any]:
         if thread_id:
             history = await _load_history_from_db(thread_id)
 
-    extracted = await _extract_calendar_fields(pq, history)
+    raw_query: str = state.get("query") or ""
+    extracted = await _extract_calendar_fields(pq, history, raw_query)
 
     event_title: Optional[str] = extracted.get("event_title")
     start_time: Optional[str] = extracted.get("start_time")
@@ -247,22 +248,25 @@ async def calendar_node(state: AgentState) -> dict[str, Any]:
 async def _extract_calendar_fields(
     processed_query: Optional[dict[str, Any]],
     conversation_history: list[dict[str, str]],
+    query: str = "",
 ) -> dict[str, Any]:
     """processed_query + conversation_history에서 캘린더 이벤트 필드 추출.
 
+    P1-4 (로드맵 §2): raw query에 정규식 prefilter를 적용해 추출한 날짜·시간 hint를
+    LLM 프롬프트에 추가 — 모호 표현 해석 정확도 향상. LLM 호출은 유지.
+
     Gemini 2.5 Flash JSON mode로 event_title, start_time, end_time, location 반환.
-    입력 없거나 추출 실패 시 빈 dict 반환 (caller가 재질문 처리).
 
     Args:
-        processed_query: query_preprocessor 출력 dict (date_reference, time_reference 등).
-        conversation_history: 과거 대화 내역 (role/content dict 리스트).
+        processed_query: query_preprocessor 출력 dict.
+        conversation_history: 과거 대화 내역.
+        query: 사용자 raw query (정규식 prefilter용).
 
     Returns:
-        {"event_title": ..., "start_time": ..., "end_time": ..., "location": ...}.
-        누락 필드는 None, 전체 실패 시 빈 dict.
+        {"event_title": ..., "start_time": ..., ...}. 전체 실패 시 빈 dict.
     """
     # 입력 없음 — Gemini 호출 불필요
-    if not processed_query and not conversation_history:
+    if not processed_query and not conversation_history and not query:
         return {}
 
     from langchain_google_genai import ChatGoogleGenerativeAI  # pyright: ignore[reportMissingImports]
@@ -282,6 +286,19 @@ async def _extract_calendar_fields(
     parts: list[str] = []
     if processed_query:
         parts.append(f"processed_query:\n{json.dumps(processed_query, ensure_ascii=False)}")
+
+    # P1-4: raw query 정규식 prefilter hint
+    if query:
+        try:
+            from src.utils.query_regex import extract_regex_fields  # pyright: ignore[reportMissingImports]
+
+            regex_hint = extract_regex_fields(query)
+            if regex_hint:
+                parts.append(f"regex_hint:\n{json.dumps(regex_hint, ensure_ascii=False)}")
+        except Exception:
+            logger.exception("calendar_node: regex hint 추출 실패 — 무시")
+        parts.append(f"raw_query:\n{query}")
+
     if conversation_history:
         # 과거 대화 최근 10턴 제한
         recent = conversation_history[-10:]
