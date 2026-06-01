@@ -88,27 +88,13 @@ _EMPTY_LEAD_LINE = "조건에 맞는 행사를 찾지 못했어요."
 # Gemini 768d 임베딩 (place_recommend_node 동일 로직 복제 — Simplicity First)
 # ---------------------------------------------------------------------------
 async def _embed_query_768d(query: str, api_key: str) -> list[float]:
-    """Gemini embedding-001 768d 단건 임베딩. 불변식 #7."""
-    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
+    """P2-2: 공통 embed_utils.embed_query로 위임. tracing span은 유지."""
+    from src.utils.embed_utils import embed_query  # pyright: ignore[reportMissingImports]
 
     async with traced_call("event.search.embed_query") as span:
         span.set_attribute("event.embed.model", "gemini-embedding-001")
         span.set_attribute("event.embed.query_length", len(query))
-
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
-        body = {
-            "model": "models/gemini-embedding-001",
-            "content": {"parts": [{"text": query[:2000]}]},
-            "outputDimensionality": 768,
-        }
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key,
-        }
-
-        data = await request_json("POST", url, json=body, headers=headers, timeout=10)
-
-        return data.get("embedding", {}).get("values", [0.0] * 768)
+        return await embed_query(query, api_key)
 
 
 # ---------------------------------------------------------------------------
