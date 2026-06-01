@@ -22,7 +22,7 @@ LocalBiz 백엔드는 Jaeger·Prometheus·Loki 인프라가 모두 떠 있고 de
 ### Goals
 - 모든 LangGraph 노드(18개)에 진입 span. 무거운 노드는 외부 호출(LLM/asyncpg/OS/Naver/OSRM/Google) sub-span까지.
 - 로그를 JSON 구조화 + `trace_id`/`span_id`/`thread_id`/`user_id`/`request_id` 자동 주입 → Grafana Loki 패널에서 한 클릭으로 Jaeger trace 점프.
-- 비즈니스 메트릭 8종 추가: intent 카운트, 노드 latency 히스토그램, LLM 호출 latency + 토큰 카운트, asyncpg 풀 게이지, OS 쿼리 latency, Naver fallback 카운터, OS k-NN empty 카운터, SSE 활성 세션 게이지.
+- 비즈니스 메트릭 9종 추가(§3.3 표 기준): intent 카운트, 노드 latency 히스토그램, LLM 호출 횟수·latency·토큰 카운트(3종), asyncpg 풀 게이지, OS 쿼리 latency, fallback 카운터, SSE 활성 세션 게이지.
 - Grafana 대시보드 1개 추가: "LangGraph Overview" (노드별 latency p50/p95/p99, intent 분포, LLM 토큰 사용량, fallback rate).
 
 ### Non-Goals (별건 처리)

@@ -75,6 +75,22 @@ class TestTracedNode:
         assert attrs.get("user_id") == "7"
         assert attrs.get("response_blocks.added") == 2
 
+    async def test_attaches_response_blocks_when_dict_returned(self) -> None:
+        """노드가 dict(`{"response_blocks": [...]}`)를 반환해도 length 부착.
+
+        실제 analysis/calendar/cost_estimate/booking 등 대부분 노드의 반환 형태 회귀.
+        """
+        exporter = _fresh_exporter()
+
+        @traced_node("analysis_like")
+        async def fn(state: dict[str, Any]) -> dict[str, Any]:
+            return {"response_blocks": [{"type": "text_stream"}, {"type": "analysis_sources"}, {"type": "done"}]}
+
+        await fn({"intent": "ANALYSIS"})
+        spans = exporter.get_finished_spans()
+        attrs = spans[0].attributes or {}
+        assert attrs.get("response_blocks.added") == 3
+
     async def test_missing_state_keys_silent(self) -> None:
         """state dict에 키가 없거나 빈 값이면 attribute 생략 — KeyError·NoneError 금지."""
         exporter = _fresh_exporter()
