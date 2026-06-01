@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # --- App ---
     debug: bool = False
 
+    # --- P3-A: intent_router + query_preprocessor 통합 (feature flag, 기본 OFF) ---
+    # true 시 단일 Gemini 호출로 intent + preprocess. 정확도 evaluation 통과 후 ON.
+    enable_combined_intent_preprocess: bool = False
+
     # --- JWT (Auth #4 회원가입 PR 도입) ---
     jwt_secret: Optional[str] = None
     jwt_algorithm: str = "HS256"

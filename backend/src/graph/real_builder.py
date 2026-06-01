@@ -91,10 +91,22 @@ def build_graph(checkpointer: Optional[Any] = None) -> Any:
     Returns:
         CompiledGraph. astream() / ainvoke()로 실행 가능.
     """
+    from src.config import get_settings  # pyright: ignore[reportMissingImports]
+
+    _use_combined = get_settings().enable_combined_intent_preprocess
+
     graph = StateGraph(AgentState)
 
     # 노드 등록 — 모두 실제 구현 (stub 0건)
-    graph.add_node("intent_router", intent_router_node)
+    if _use_combined:
+        # P3-A: 단일 호출 통합 노드 (feature flag)
+        from src.graph.combined_intent_preprocess_node import (  # pyright: ignore[reportMissingImports]
+            combined_intent_preprocess_node,
+        )
+
+        graph.add_node("intent_router", combined_intent_preprocess_node)
+    else:
+        graph.add_node("intent_router", intent_router_node)
     graph.add_node("query_preprocessor", query_preprocessor_node)
     graph.add_node("place_search", place_search_node)
     graph.add_node("place_recommend", place_recommend_node)
