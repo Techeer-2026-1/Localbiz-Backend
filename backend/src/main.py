@@ -20,8 +20,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.health import health_check  # pyright: ignore[reportMissingImports]
+from src.observability.logging import configure_logging  # pyright: ignore[reportMissingImports]
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+# JSON 구조화 로깅 + trace_id/request_id/user_id/thread_id 자동 주입.
+# LOG_FORMAT=plain 환경변수로 평문 fallback 가능 (로컬 개발용).
+configure_logging()
 
 logger = logging.getLogger(__name__)
 
