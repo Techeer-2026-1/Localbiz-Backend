@@ -25,18 +25,22 @@ _COMPARE_SYSTEM_PROMPT = """\
 """
 
 
+_COMPARE_SEP_RE = re.compile(r"(?:\s*vs\s*|\s*VS\s*|와\s+|과\s+|이랑\s+|랑\s+|하고\s+|\s*그리고\s+)")
+_TRAILING_NOISE_RE = re.compile(r"\s*(리뷰|비교|compare).*$", flags=re.IGNORECASE)
+
+
 def _extract_place_names(processed_query: dict[str, Any], query: str) -> list[str]:
-    """vs/VS/와 구분자로 장소명 추출. 2개 미만이면 [] 반환."""
-    # 한국어 비교 구분자 — 부착형('점이랑')까지 포함. 첫 매칭이 2개 이상 분할되면 채택.
-    # REVIEW_COMPARE intent로 이미 분류된 쿼리이므로 과분할 위험은 낮다.
-    for sep in (" vs ", " VS ", "이랑", " 와 ", " 과 ", "하고", " 그리고 ", " 랑 "):
-        if sep in query:
-            parts = [p.strip() for p in query.split(sep)]
-            # 꼬리말(리뷰/비교/compare …) 제거 — '명동점 리뷰 비교해줘' → '명동점'
-            parts = [re.sub(r"\s*(리뷰|비교|compare).*$", "", p, flags=re.IGNORECASE).strip() for p in parts]
-            parts = [p for p in parts if p]
-            if len(parts) >= 2:
-                return parts
+    """vs/VS/와/과/이랑/하고/그리고/랑 구분자로 장소명 추출. 2개 미만이면 [] 반환.
+
+    REVIEW_COMPARE intent로 이미 분류된 쿼리이므로 조사형 결합("스타벅스와 투썸")도
+    공백 없이 매칭. maxsplit=1로 2개로만 분할해 과분할 회피.
+    """
+    parts = _COMPARE_SEP_RE.split(query, maxsplit=1)
+    if len(parts) >= 2:
+        parts = [_TRAILING_NOISE_RE.sub("", p).strip() for p in parts]
+        parts = [p for p in parts if p]
+        if len(parts) >= 2:
+            return parts
 
     keywords: list[str] = processed_query.get("keywords") or []
     if isinstance(keywords, list) and len(keywords) >= 2:
