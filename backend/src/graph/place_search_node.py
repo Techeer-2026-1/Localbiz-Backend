@@ -102,24 +102,10 @@ async def _search_pg(
 # OpenSearch k-NN 검색
 # ---------------------------------------------------------------------------
 async def _embed_query_768d(query: str, api_key: str) -> list[float]:
-    """Gemini embedding-001 768d 단건 임베딩 (async). 불변식 #7."""
+    """P2-2: 공통 embed_utils.embed_query로 위임. 시그니처 호환 유지."""
+    from src.utils.embed_utils import embed_query  # pyright: ignore[reportMissingImports]
 
-    from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
-
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
-    body = {
-        "model": "models/gemini-embedding-001",
-        "content": {"parts": [{"text": query[:2000]}]},
-        "outputDimensionality": 768,
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": api_key,
-    }
-
-    data = await request_json("POST", url, json=body, headers=headers, timeout=10)
-
-    return data.get("embedding", {}).get("values", [0.0] * 768)
+    return await embed_query(query, api_key)
 
 
 async def _search_os(
