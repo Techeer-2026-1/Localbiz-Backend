@@ -138,3 +138,104 @@ def test_classify_prompts_contain_not_refine_guidance() -> None:
     for prompt in [_CLASSIFY_SYSTEM_PROMPT, _CLASSIFY_MULTI_SYSTEM_PROMPT]:
         assert "NOT REFINE" in prompt, "프롬프트에 NOT REFINE 부정 예시가 없음"
         assert "questions about previous results" in prompt or "questions about a previous response" in prompt
+
+
+# ---------------------------------------------------------------------------
+# _filter_refineable / _identify_target 회귀 (#212)
+# ---------------------------------------------------------------------------
+def test_filter_refineable_excludes_refine_self_response() -> None:
+    """REFINE 자기 실패 응답은 후보에서 제외.
+
+    실제 DB 관측 케이스 (thread session-1780290718671):
+      msg 832: [intent(REFINE), intent(REFINE), text_stream, done]  ← REFINE 자기응답
+      msg 824: [intent(COURSE_PLAN), course, text_stream, map_route]  ← 실제 코스 응답
+    """
+    from src.graph.refine_node import _filter_refineable
+
+    refine_failure = [
+        {"type": "intent", "intent": "REFINE", "confidence": 1.0},
+        {"type": "intent", "intent": "REFINE", "confidence": 1.0},
+        {"type": "text_stream", "system": "...", "prompt": "..."},
+        {"type": "done", "status": "done"},
+    ]
+    course_response = [
+        {"type": "intent", "intent": "COURSE_PLAN", "confidence": 0.95},
+        {"type": "course", "stops": [{"order": 1, "place": {"name": "홍대씨앤", "place_id": "p1"}}]},
+        {"type": "text_stream", "system": "...", "prompt": "..."},
+        {"type": "map_route", "polyline": "..."},
+    ]
+
+    refineable, intents = _filter_refineable([refine_failure, course_response])
+
+    assert len(refineable) == 1
+    assert intents == ["COURSE_PLAN"]
+    assert refineable[0] is course_response
+
+
+def test_filter_refineable_keeps_order() -> None:
+    """refineable 응답 순서가 입력 순서(최신순)와 일치."""
+    from src.graph.refine_node import _filter_refineable
+
+    course_resp = [{"type": "intent", "intent": "COURSE_PLAN"}, {"type": "course", "stops": []}]
+    places_resp = [{"type": "intent", "intent": "PLACE_SEARCH"}, {"type": "places", "items": []}]
+    refine_resp = [{"type": "intent", "intent": "REFINE"}, {"type": "text_stream"}]
+
+    refineable, intents = _filter_refineable([refine_resp, course_resp, refine_resp, places_resp])
+
+    # refine_resp 2건은 모두 제거되고 course → places 순서 유지
+    assert intents == ["COURSE_PLAN", "PLACE_SEARCH"]
+    assert refineable[0] is course_resp
+    assert refineable[1] is places_resp
+
+
+def test_filter_refineable_all_refine_returns_empty() -> None:
+    """모든 응답이 REFINE 자기응답이면 빈 결과 + 호출부가 안내 메시지로 fallthrough."""
+    from src.graph.refine_node import _filter_refineable
+
+    refine_resp = [{"type": "intent", "intent": "REFINE"}, {"type": "text_stream"}]
+    refineable, intents = _filter_refineable([refine_resp, refine_resp])
+
+    assert refineable == []
+    assert intents == []
+
+
+async def test_identify_target_skips_refine_self_response_for_course() -> None:
+    """가장 최근 응답이 REFINE 자기응답이어도 그 다음 refineable 응답을 target으로 잡음.
+
+    #212 핵심 회귀 — DB 관측 사례 그대로 재현.
+
+    asyncio.run()을 쓰면 세션 event_loop fixture를 닫아 후속 sync 테스트가
+    'no current event loop'으로 깨지므로 async test로 작성 — pytest-asyncio auto mode가 처리.
+    """
+    from src.graph.refine_node import _identify_target
+
+    refine_failure = [
+        {"type": "intent", "intent": "REFINE"},
+        {"type": "intent", "intent": "REFINE"},
+        {"type": "text_stream"},
+        {"type": "done"},
+    ]
+    calendar_resp = [
+        {"type": "intent", "intent": "CALENDAR"},
+        {"type": "text_stream"},
+        {"type": "calendar", "event_id": "..."},
+        {"type": "done"},
+    ]
+    course_resp = [
+        {"type": "intent", "intent": "COURSE_PLAN"},
+        {"type": "course", "stops": [{"order": 1, "place": {"name": "홍대씨앤"}}]},
+        {"type": "text_stream"},
+        {"type": "map_route"},
+    ]
+
+    target, intent = await _identify_target(
+        query="홍대씨앤이 마음에 들지 않아, 다른 팝업 스토어로 바꿔줘",
+        all_assistant_blocks=[refine_failure, calendar_resp, course_resp],
+        conversation_history=[],
+    )
+
+    # CALENDAR가 가장 최근 refineable이지만 plan 의도가 course 쪽이라 caller의 _parse_refinement가
+    # 결정하므로 여기선 단순히 _identify_target이 self-REFINE을 skip하는지만 검증.
+    # (명시적 참조 없으니 가장 최근 refineable = CALENDAR가 target.)
+    assert intent == "CALENDAR"
+    assert target is calendar_resp

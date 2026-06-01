@@ -179,6 +179,28 @@ def _has_explicit_reference(query: str) -> bool:
 # ---------------------------------------------------------------------------
 # 수정 대상 특정
 # ---------------------------------------------------------------------------
+def _filter_refineable(
+    all_assistant_blocks: list[list[dict[str, Any]]],
+) -> tuple[list[list[dict[str, Any]]], list[Optional[str]]]:
+    """REFINE 자기 응답(target 후보로 부적격)을 걸러내고, 각 블록의 원본 intent도 함께 반환.
+
+    REFINE 노드가 "이전 응답이 없어요" / 실패 안내로 응답한 경우, 그 응답을 다음 turn의
+    수정 대상으로 잡으면 self-loop가 되며 _detect_original_intent도 None을 반환한다.
+    원본 intent가 None이거나 'REFINE'인 응답은 후보에서 제외.
+
+    Returns:
+        (refineable_blocks, refineable_intents) — 같은 길이, 최신순 유지.
+    """
+    refineable_blocks: list[list[dict[str, Any]]] = []
+    refineable_intents: list[Optional[str]] = []
+    for blocks in all_assistant_blocks:
+        intent = _detect_original_intent(blocks)
+        if intent and intent != "REFINE":
+            refineable_blocks.append(blocks)
+            refineable_intents.append(intent)
+    return refineable_blocks, refineable_intents
+
+
 async def _identify_target(
     query: str,
     all_assistant_blocks: list[list[dict[str, Any]]],
@@ -186,18 +208,26 @@ async def _identify_target(
 ) -> tuple[list[dict[str, Any]], Optional[str]]:
     """수정 대상 응답 블록과 원본 intent를 특정.
 
-    기본: 직전 응답. 명시적 참조 시 Gemini 추론.
+    REFINE 자기 응답은 후보에서 제외 후 최신 refineable 응답을 기본으로 잡는다.
+    명시적 참조(아까/이전/그때 등)가 있을 때만 Gemini로 더 거슬러 올라가 추론.
 
     Returns:
-        (target_blocks, original_intent). 실패 시 ([], None).
+        (target_blocks, original_intent). 후보가 0건이거나 실패 시 ([], None).
     """
     if not all_assistant_blocks:
         return [], None
 
-    # 기본: 직전 응답
-    if not _has_explicit_reference(query) or len(all_assistant_blocks) == 1:
-        target = all_assistant_blocks[0]
-        return target, _detect_original_intent(target)
+    refineable_blocks, refineable_intents = _filter_refineable(all_assistant_blocks)
+    if not refineable_blocks:
+        logger.info(
+            "refine_node._identify_target: refineable 응답 0건 — 전체 %d건 모두 REFINE 자기응답 또는 intent 추론 실패",
+            len(all_assistant_blocks),
+        )
+        return [], None
+
+    # 기본: 가장 최근 refineable 응답
+    if not _has_explicit_reference(query) or len(refineable_blocks) == 1:
+        return refineable_blocks[0], refineable_intents[0]
 
     # 명시적 참조 → Gemini 추론
     try:
@@ -207,13 +237,12 @@ async def _identify_target(
 
         settings = get_settings()
         if not settings.gemini_llm_api_key:
-            target = all_assistant_blocks[0]
-            return target, _detect_original_intent(target)
+            return refineable_blocks[0], refineable_intents[0]
 
-        # 응답 요약 생성
+        # 응답 요약 생성 — refineable 후보만 (전체 인덱스가 아닌 refineable 인덱스 기준)
         summaries: list[str] = []
-        for i, blocks in enumerate(all_assistant_blocks):
-            intent = _detect_original_intent(blocks)
+        for i, blocks in enumerate(refineable_blocks):
+            intent = refineable_intents[i]
             block_types = [b.get("type", "") for b in blocks if isinstance(b, dict)]
             summaries.append(f"[{i}] intent={intent}, blocks={block_types}")
 
@@ -238,15 +267,13 @@ async def _identify_target(
 
         result = json.loads(text)
         idx = int(result.get("target_message_index", 0))
-        idx = max(0, min(idx, len(all_assistant_blocks) - 1))
+        idx = max(0, min(idx, len(refineable_blocks) - 1))
 
-        target = all_assistant_blocks[idx]
-        return target, _detect_original_intent(target)
+        return refineable_blocks[idx], refineable_intents[idx]
 
     except Exception:
-        logger.exception("refine_node: target 추론 실패 → 직전 응답 fallback")
-        target = all_assistant_blocks[0]
-        return target, _detect_original_intent(target)
+        logger.exception("refine_node: target 추론 실패 → 직전 refineable 응답 fallback")
+        return refineable_blocks[0], refineable_intents[0]
 
 
 # ---------------------------------------------------------------------------
@@ -421,12 +448,24 @@ async def refine_node(state: dict[str, Any]) -> dict[str, Any]:
     # 1. 이전 응답 블록 로드
     all_blocks = await _load_previous_assistant_blocks(thread_id)
     if not all_blocks:
+        logger.info(
+            "refine_node: 이전 assistant 응답 0건 thread_id=%s → 안내 메시지",
+            thread_id,
+        )
         return {"response_blocks": _no_previous_response_blocks()}
 
     # 2. 수정 대상 특정
     target_blocks, original_intent = await _identify_target(query, all_blocks, conversation_history)
 
     if not target_blocks or not original_intent:
+        logger.info(
+            "refine_node: target 추정 실패 thread_id=%s, all_blocks_count=%d, "
+            "target_blocks_empty=%s, original_intent=%s → 안내 메시지",
+            thread_id,
+            len(all_blocks),
+            not target_blocks,
+            original_intent,
+        )
         return {"response_blocks": _no_previous_response_blocks()}
 
     # 3. 수정 지시 파싱
