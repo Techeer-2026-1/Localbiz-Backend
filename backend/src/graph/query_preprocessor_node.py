@@ -164,6 +164,18 @@ async def _extract_query_fields(
         result.setdefault("expanded_query", query)
         result.setdefault("keywords", [])
 
+        # P0-2: 정규식 prefilter로 LLM 빈 필드를 보완 (정확도 우선 — overwrite 안 함)
+        try:
+            from src.utils.query_regex import extract_regex_fields  # pyright: ignore[reportMissingImports]
+
+            today_date = date.fromisoformat(today_str)
+            regex_result = extract_regex_fields(query, today_date)
+            for k, v in regex_result.items():
+                if result.get(k) is None:
+                    result[k] = v
+        except Exception:
+            logger.exception("query_regex 보완 실패 — LLM 결과만 사용")
+
         # date_*_resolved 보장 + ISO "YYYY-MM-DD" 형식 검증 (Gemini 응답 후처리)
         # Gemini가 잘못된 형식("2026/05/16", "다음 주" 등) 반환 시 None으로 정정
         result.setdefault("date_start_resolved", None)
