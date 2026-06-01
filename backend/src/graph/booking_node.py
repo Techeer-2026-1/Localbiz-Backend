@@ -22,6 +22,15 @@ logger = logging.getLogger(__name__)
 # 동일 장소 반복 질문 시 재검색 방지 (1시간)
 _booking_cache: TTLCache = TTLCache(maxsize=200, ttl=3600)
 
+
+def _normalize_cache_key(value: str) -> str:
+    """P1-5: 캐시 키 정규화 — 공백 제거 + lowercase로 hit rate ↑.
+
+    의미 단어는 보존(조사·존댓말 제거는 잘못된 매칭 위험으로 미적용).
+    """
+    return "".join(value.lower().split())
+
+
 _ACCOM_CATS = {"숙박", "호텔", "모텔", "게스트하우스", "민박", "여관", "accommodation", "hotel"}
 
 _BOOKING_SYSTEM = (
@@ -66,7 +75,10 @@ async def booking_node(state: AgentState) -> dict[str, Any]:
             "response_blocks": [_ask_block("체크인/체크아웃 날짜를 알려주세요. 예) '6월 10일 체크인, 12일 체크아웃'")]
         }
 
-    cache_key = f"{place_name}:{category}:{check_in}:{check_out}"
+    cache_key = (
+        f"{_normalize_cache_key(place_name)}:{_normalize_cache_key(category)}:"
+        f"{_normalize_cache_key(check_in)}:{_normalize_cache_key(check_out)}"
+    )
     if cache_key in _booking_cache:
         logger.info("booking_node: cache hit place=%s", place_name)
         return {"response_blocks": [_text_stream_block(_booking_cache[cache_key])]}
