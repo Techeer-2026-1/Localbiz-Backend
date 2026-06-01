@@ -18,6 +18,8 @@ import re
 from datetime import date, timedelta
 from typing import Any, Optional
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 _NAVER_BLOG_URL = "https://openapi.naver.com/v1/search/blog.json"
@@ -158,6 +160,7 @@ async def _handle_refinement(
     return await cost_estimate_node(state)
 
 
+@traced_node("cost_estimate")
 async def cost_estimate_node(state: dict[str, Any]) -> dict[str, Any]:
     """COST_ESTIMATE 노드 — 비용 견적 text_stream 블록 반환.
 

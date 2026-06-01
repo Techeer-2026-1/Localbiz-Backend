@@ -13,6 +13,8 @@ import logging
 import re
 from typing import Any
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 _COMPARE_SYSTEM_PROMPT = """\
@@ -171,6 +173,7 @@ async def _handle_refinement(
     return await review_compare_node(state)
 
 
+@traced_node("review_compare")
 async def review_compare_node(state: dict[str, Any]) -> dict[str, Any]:
     """LangGraph 노드 — REVIEW_COMPARE intent 처리 (Phase 1)."""
     previous_blocks = state.get("previous_blocks")

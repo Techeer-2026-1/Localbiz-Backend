@@ -22,6 +22,7 @@ from cachetools import TTLCache
 
 from src.config import get_settings  # pyright: ignore[reportMissingImports]
 from src.db.postgres import get_pool  # pyright: ignore[reportMissingImports]
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
 from src.graph.state import AgentState  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,7 @@ async def _load_history_from_db(thread_id: str) -> list[dict[str, str]]:
     return history
 
 
+@traced_node("calendar")
 async def calendar_node(state: AgentState) -> dict[str, Any]:
     """CALENDAR intent 노드 — Google Calendar 이벤트 생성.
 

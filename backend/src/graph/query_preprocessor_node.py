@@ -15,6 +15,8 @@ import re
 from datetime import date
 from typing import Any, Optional
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 # ISO date "YYYY-MM-DD" 형식 검증 정규식 (Gemini 응답 후처리)
@@ -241,6 +243,7 @@ async def _load_history_from_db(thread_id: str) -> list[dict[str, str]]:
     return history
 
 
+@traced_node("query_preprocessor")
 async def query_preprocessor_node(state: dict[str, Any]) -> dict[str, Any]:
     """LangGraph 공통 쿼리 전처리 노드 (불변식 #12).
 

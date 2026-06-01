@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 # 불변식 #6: 6지표 키 고정 (이름·개수 변경 금지)
@@ -176,6 +178,7 @@ def _build_analysis_blocks(
     ]
 
 
+@traced_node("analysis")
 async def analysis_node(state: dict[str, Any]) -> dict[str, Any]:
     """LangGraph 노드 — ANALYSIS intent 처리 (Phase 1)."""
     query: str = state.get("query", "")

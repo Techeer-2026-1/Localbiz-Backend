@@ -10,6 +10,8 @@ import logging
 from enum import StrEnum  # pyright: ignore[reportAttributeAccessIssue]
 from typing import Any, Optional
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 
@@ -348,6 +350,7 @@ async def classify_intent(
         return (_GENERAL_FALLBACK, 0.0)
 
 
+@traced_node("intent_router")
 async def intent_router_node(state: dict[str, Any]) -> dict[str, Any]:
     """LangGraph 노드 함수 — intent 분류 결과를 state에 기록.
 

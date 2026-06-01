@@ -34,14 +34,10 @@ import re
 from datetime import date
 from typing import Any, Optional
 
-from opentelemetry import trace  # pyright: ignore[reportMissingImports]
-
+from src.graph._tracing import traced_call, traced_node  # pyright: ignore[reportMissingImports]
 from src.graph.event_filters import is_real_event  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
-
-# tracer는 JAEGER_HOST 미설정 환경(로컬·테스트)에서도 no-op으로 동작 — telemetry.py 활성 시 자동으로 export.
-tracer = trace.get_tracer(__name__)
 
 _EVENT_SEARCH_SYSTEM_PROMPT = (
     "당신은 서울 로컬 라이프 AI 챗봇 'AnyWay'입니다. "
@@ -94,7 +90,7 @@ async def _embed_query_768d(query: str, api_key: str) -> list[float]:
     """Gemini embedding-001 768d 단건 임베딩. 불변식 #7."""
     from src.utils.resilience import request_json  # pyright: ignore[reportMissingImports]
 
-    with tracer.start_as_current_span("event.search.embed_query") as span:
+    async with traced_call("event.search.embed_query") as span:
         span.set_attribute("event.embed.model", "gemini-embedding-001")
         span.set_attribute("event.embed.query_length", len(query))
 
@@ -144,7 +140,7 @@ async def _search_os_events(
     from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
 
     try:
-        with tracer.start_as_current_span("event.search.opensearch") as span:
+        async with traced_call("event.search.opensearch") as span:
             span.set_attribute("event.os.index", "events_vector")
             span.set_attribute("event.os.k", _OS_CANDIDATE_K)
             span.set_attribute("event.os.min_score", _OS_MIN_SCORE)
@@ -299,7 +295,7 @@ async def _search_pg(
     sql = sql + " ORDER BY date_start ASC LIMIT $" + str(len(params))
 
     try:
-        with tracer.start_as_current_span("event.search.postgres") as span:
+        async with traced_call("event.search.postgres") as span:
             span.set_attribute("event.pg.filter_district", district or "")
             span.set_attribute("event.pg.filter_category", category or "")
             span.set_attribute("event.pg.filter_keyword_count", len(keywords))
@@ -350,7 +346,7 @@ async def _search_naver(
     }
 
     try:
-        with tracer.start_as_current_span("event.search.naver_fallback") as span:
+        async with traced_call("event.search.naver_fallback") as span:
             span.set_attribute("event.naver.display", _NAVER_DISPLAY)
             span.set_attribute("event.naver.query_length", len(query))
             data = await request_json("GET", _NAVER_BLOG_URL, headers=headers, params=params, timeout=_NAVER_TIMEOUT)
@@ -426,7 +422,7 @@ async def _merge_candidates(
 
     if os_ids:
         try:
-            with tracer.start_as_current_span("event.search.merge.pg_enrich") as span:
+            async with traced_call("event.search.merge.pg_enrich") as span:
                 span.set_attribute("event.merge.os_ids_count", len(os_ids))
                 rows = await pool.fetch(
                     "SELECT event_id, title, category, place_name, address, district, "
@@ -502,7 +498,7 @@ async def _llm_rerank(
     user_prompt = f"사용자 조건: {query}\n키워드: {', '.join(keywords)}\n\n후보 행사:\n" + "\n".join(candidate_lines)
 
     try:
-        with tracer.start_as_current_span("event.search.llm_rerank") as span:
+        async with traced_call("event.search.llm_rerank") as span:
             span.set_attribute("event.llm.model", "gemini-2.5-flash")
             span.set_attribute("event.llm.candidates", len(candidates))
             llm = ChatGoogleGenerativeAI(
@@ -770,6 +766,7 @@ async def _handle_refinement(
     return {"response_blocks": blocks}
 
 
+@traced_node("event_search")
 async def event_search_node(state: dict[str, Any]) -> dict[str, Any]:
     """EVENT_SEARCH 노드 — PG 정형 + OS k-NN + LLM Rerank 행사 검색 (Phase 1).
 

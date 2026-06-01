@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 # 시스템 프롬프트 — GENERAL intent 전용
@@ -26,6 +28,7 @@ _SYSTEM_PROMPT = (
 )
 
 
+@traced_node("general")
 async def general_node(state: dict[str, Any]) -> dict[str, Any]:
     """GENERAL intent 노드 — text_stream 블록 생성.
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -81,6 +83,7 @@ def _validate_block_order(
 # ---------------------------------------------------------------------------
 # 노드 함수
 # ---------------------------------------------------------------------------
+@traced_node("response_builder")
 async def response_builder_node(state: dict[str, Any]) -> dict[str, Any]:
     """response_blocks에 done 블록 추가 + 블록 순서 검증.
 

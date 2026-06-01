@@ -32,6 +32,8 @@ import logging
 import re
 from typing import Any, Optional
 
+from src.graph._tracing import traced_node  # pyright: ignore[reportMissingImports]
+
 _URL_RE = re.compile(r"https?://\S+")
 # "여기 어딘지" 류 — 특정 장소 식별 의도
 _IDENTIFY_RE = re.compile(
@@ -985,6 +987,7 @@ async def _handle_candidates(
 # ---------------------------------------------------------------------------
 # LangGraph 노드
 # ---------------------------------------------------------------------------
+@traced_node("image_search")
 async def image_search_node(state: dict[str, Any]) -> dict[str, Any]:
     """IMAGE_SEARCH 노드 — 이미지 URL에서 장소 식별.
 
