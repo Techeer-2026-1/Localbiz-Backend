@@ -115,6 +115,24 @@ async def _extract_query_fields(
 
     today_str = current_date if current_date else date.today().isoformat()
 
+    # P2-1: processed_query 캐시 — 시간 의존 쿼리는 skip (TTL과 의미 충돌 방지)
+    _time_dep_keywords = ("오늘", "내일", "모레", "지금", "이번 주", "다음 주", "주말")
+    _is_time_dependent = any(k in query for k in _time_dep_keywords)
+    _cache_key: Optional[str] = None
+    if not _is_time_dependent and not conversation_history:
+        import hashlib as _hashlib
+
+        from src.utils.cache import cache_get as _cache_get  # pyright: ignore[reportMissingImports]
+
+        _cache_key = "pq:" + _hashlib.sha256(f"{query}|{intent}|{today_str}".encode()).hexdigest()
+        try:
+            _cached = await _cache_get(_cache_key)
+            if isinstance(_cached, dict) and _cached:
+                logger.info("query_preprocessor: cache hit intent=%s", intent)
+                return _cached
+        except Exception:
+            logger.exception("query_preprocessor: cache_get 실패 — 무시")
+
     from langchain_google_genai import ChatGoogleGenerativeAI  # pyright: ignore[reportMissingImports]
 
     from src.config import get_settings  # pyright: ignore[reportMissingImports]
@@ -187,6 +205,16 @@ async def _extract_query_fields(
 
         # PII 유출 방지를 위해 결과의 키 목록과 intent만 로깅
         logger.info("query_preprocessor: intent=%s, extracted_keys=%s", intent, list(result.keys()))
+
+        # P2-1: 캐시 저장 (시간 비의존 + 히스토리 없는 케이스만)
+        if _cache_key is not None:
+            try:
+                from src.utils.cache import cache_set as _cache_set  # pyright: ignore[reportMissingImports]
+
+                await _cache_set(_cache_key, result, ttl=1800)
+            except Exception:
+                logger.exception("query_preprocessor: cache_set 실패 — 무시")
+
         return result
 
     except Exception:
