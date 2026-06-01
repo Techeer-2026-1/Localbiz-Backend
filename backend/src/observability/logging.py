@@ -41,6 +41,31 @@ _NOISY_LOGGERS: tuple[str, ...] = (
 )
 
 
+class UvicornAccessFilter(logging.Filter):
+    """uvicorn.access 로거에서 /health, /metrics 요청 로그를 drop.
+
+    헬스체크/메트릭 스크랩이 초당 호출돼 비즈니스 로그가 묻히고 Loki 적재 비용도
+    증가하는 문제 회피. uvicorn.access 표준 args 위치는
+    (client_addr, method, full_path, http_version, status_code) — 3번째가 path.
+    형식이 다르면 getMessage() fallback.
+    """
+
+    _EXCLUDED_PATHS: tuple[str, ...] = ("/health", "/metrics")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        path = ""
+        if isinstance(record.args, tuple) and len(record.args) >= 3:
+            third = record.args[2]
+            if isinstance(third, str):
+                path = third
+        if not path:
+            path = record.getMessage()
+        for excluded in self._EXCLUDED_PATHS:
+            if excluded in path:
+                return False
+        return True
+
+
 class TraceContextFilter(logging.Filter):
     """모든 로그 레코드에 trace/request 컨텍스트 필드를 주입.
 
@@ -105,4 +130,6 @@ def configure_logging(format_: Optional[LogFormat] = None, level: int = logging.
     root.setLevel(level)
     for noisy in _NOISY_LOGGERS:
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # uvicorn.access는 INFO로 두되 /health·/metrics만 drop — 비즈니스 API 호출 로그는 유지.
+    logging.getLogger("uvicorn.access").addFilter(UvicornAccessFilter())
     root.info("logging configured: format=%s level=%s", fmt, logging.getLevelName(level))
