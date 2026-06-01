@@ -335,6 +335,17 @@ async def _llm_rerank(
     if not settings.gemini_llm_api_key or not candidates:
         return candidates[:_MAX_RESULTS], {}
 
+    # P1-1 (로드맵 §2): 후보가 _MAX_RESULTS 이하면 LLM rerank skip.
+    # OS _score 정렬 결과를 그대로 사용 — 5건 이하는 어차피 모두 노출되므로 순위 영향 미미.
+    # 사유 텍스트(reasons)는 빈 dict (UX 약소 저하, 정확도 저하 없음).
+    if len(candidates) <= _MAX_RESULTS:
+        logger.info(
+            "place_recommend: skip LLM rerank — candidates(%d) <= _MAX_RESULTS(%d)",
+            len(candidates),
+            _MAX_RESULTS,
+        )
+        return candidates[:_MAX_RESULTS], {}
+
     # 후보 메타 구성
     candidate_lines: list[str] = []
     for c in candidates:

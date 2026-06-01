@@ -228,3 +228,28 @@ async def test_llm_rerank_empty_candidates() -> None:
 
     assert reranked == []
     assert reasons == {}
+
+
+# P1-1 회귀: candidates ≤ _MAX_RESULTS면 LLM ainvoke 미호출
+async def test_llm_rerank_skip_when_candidates_below_threshold() -> None:
+    """후보 3건 → LLM rerank skip + OS 순서 그대로."""
+    from src.graph.place_recommend_node import _llm_rerank  # pyright: ignore[reportMissingImports]
+
+    candidates = [{"place_id": f"p-{i}", "name": f"장소{i}", "category": "카페"} for i in range(3)]
+
+    mock_settings = type("Settings", (), {"gemini_llm_api_key": "fake-key"})()
+
+    with (
+        patch("src.config.get_settings", return_value=mock_settings),
+        patch("langchain_google_genai.ChatGoogleGenerativeAI") as mock_llm_cls,
+    ):
+        mock_llm = AsyncMock()
+        mock_llm_cls.return_value = mock_llm
+
+        reranked, reasons = await _llm_rerank(candidates, "카페", [], {})
+
+        mock_llm.ainvoke.assert_not_called()
+
+    assert len(reranked) == 3
+    assert reranked[0]["place_id"] == "p-0"
+    assert reasons == {}

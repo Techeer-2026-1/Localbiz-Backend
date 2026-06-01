@@ -436,10 +436,13 @@ async def test_merge_candidates_dedup_os_priority() -> None:
 # _llm_rerank — Gemini Flash 순위 재배치 + per-event 추천 사유
 # ---------------------------------------------------------------------------
 async def test_llm_rerank_reorders_and_aligns_descriptions() -> None:
-    """ranked_indices 순서로 재배치 + descriptions를 reranked 순서에 정렬 (#110 G2)."""
+    """ranked_indices 순서로 재배치 + descriptions를 reranked 순서에 정렬 (#110 G2).
+
+    candidates는 _MAX_RESULTS(5) 초과여야 P1-1 임계를 넘어 LLM rerank가 실제 동작한다.
+    """
     from src.graph import event_recommend_node as mod  # pyright: ignore[reportMissingImports]
 
-    candidates = [{"event_id": f"e-{i}", "title": f"행사{i}"} for i in range(4)]
+    candidates = [{"event_id": f"e-{i}", "title": f"행사{i}"} for i in range(6)]
     mock_settings = type("Settings", (), {"gemini_llm_api_key": "fake-key"})()
 
     with (
@@ -459,7 +462,8 @@ async def test_llm_rerank_reorders_and_aligns_descriptions() -> None:
     assert reranked[1]["event_id"] == "e-0"
     assert descriptions[0] == "이유2"
     assert descriptions[1] == "이유0"
-    assert len(reranked) == 4
+    # _MAX_RESULTS=5만큼만 반환
+    assert len(reranked) == 5
     assert len(descriptions) == len(reranked)
 
 

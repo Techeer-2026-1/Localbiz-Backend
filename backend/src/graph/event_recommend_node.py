@@ -467,6 +467,15 @@ async def _llm_rerank(
     if not settings.gemini_llm_api_key or not candidates:
         return candidates[:_MAX_RESULTS], []
 
+    # P1-1 (로드맵 §2): 후보가 _MAX_RESULTS 이하면 LLM rerank skip — place_recommend와 동일.
+    if len(candidates) <= _MAX_RESULTS:
+        logger.info(
+            "event_recommend: skip LLM rerank — candidates(%d) <= _MAX_RESULTS(%d)",
+            len(candidates),
+            _MAX_RESULTS,
+        )
+        return candidates[:_MAX_RESULTS], []
+
     candidate_lines: list[str] = []
     for i, c in enumerate(candidates):
         candidate_lines.append(
