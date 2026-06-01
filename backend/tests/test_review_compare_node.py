@@ -114,7 +114,8 @@ async def test_build_compare_blocks_success() -> None:
         },
     }
 
-    blocks = _build_compare_blocks("스타벅스 vs 블루보틀 비교", places, scores_map)
+    review_count_map = {"uuid-1": 12, "uuid-2": 30}
+    blocks = _build_compare_blocks("스타벅스 vs 블루보틀 비교", places, scores_map, review_count_map)
 
     assert len(blocks) == 3
 
@@ -135,14 +136,15 @@ async def test_build_compare_blocks_success() -> None:
         "atmosphere",
         "expertise",
     }
+    assert set(chart["places"][1]["scores"].keys()) == set(chart["places"][0]["scores"].keys())
 
     src = blocks[2]
     assert src["type"] == "analysis_sources"
-    assert src["review_count"] == 2
+    assert src["review_count"] == 42
 
 
 async def test_build_compare_blocks_no_scores() -> None:
-    """OS 문서 없는 장소 → scores={} → 에러 없이 chart.places에 포함."""
+    """OS 문서 없는 장소 → scores 빈 dict → 6 키 0.0 fill (#214)."""
     from src.graph.review_compare_node import _build_compare_blocks  # pyright: ignore[reportMissingImports]
 
     places: list[dict[str, Any]] = [
@@ -150,13 +152,90 @@ async def test_build_compare_blocks_no_scores() -> None:
         {"place_id": "uuid-2", "name": "장소B", "category": "카페"},
     ]
 
-    blocks = _build_compare_blocks("장소A vs 장소B", places, {})
+    blocks = _build_compare_blocks("장소A vs 장소B 비교", places, {}, {})
 
     chart = blocks[1]
     assert len(chart["places"]) == 2
-    assert chart["places"][0]["scores"] == {}
-    assert chart["places"][1]["scores"] == {}
+    for place_chart in chart["places"]:
+        assert set(place_chart["scores"].keys()) == {
+            "satisfaction",
+            "accessibility",
+            "cleanliness",
+            "value",
+            "atmosphere",
+            "expertise",
+        }
+        assert all(v == 0.0 for v in place_chart["scores"].values())
     assert blocks[2]["review_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# #214 회귀 — text_stream prompt에 raw 점수 leak 금지 + 비교 키워드 self-check
+# ---------------------------------------------------------------------------
+def test_build_compare_blocks_text_stream_does_not_leak_scores() -> None:
+    """text_stream prompt에 점수 수치/지표명이 leak되면 안 됨 (#214 C1)."""
+    from src.graph.review_compare_node import _build_compare_blocks  # pyright: ignore[reportMissingImports]
+
+    places: list[dict[str, Any]] = [
+        {"place_id": "p1", "name": "A", "category": "카페"},
+        {"place_id": "p2", "name": "B", "category": "카페"},
+    ]
+    scores_map: dict[str, dict[str, float]] = {
+        "p1": {"satisfaction": 4.9, "value": 2.5, "cleanliness": 4.9},
+        "p2": {"satisfaction": 4.5, "value": 3.0, "cleanliness": 4.7},
+    }
+
+    blocks = _build_compare_blocks("A vs B 비교", places, scores_map, {"p1": 5, "p2": 5})
+
+    prompt: str = blocks[0]["prompt"]
+    forbidden_score_tokens = ("4.9", "2.5", "4.5", "3.0", "4.7", "5.0", "/5", "/5.0")
+    for tok in forbidden_score_tokens:
+        assert tok not in prompt, f"prompt에 점수 leak: {tok!r}"
+    for key in ("satisfaction", "accessibility", "cleanliness", "value", "atmosphere", "expertise"):
+        assert key not in prompt, f"prompt에 지표 키 leak: {key!r}"
+
+
+def test_build_compare_blocks_chart_has_six_metric_keys() -> None:
+    """chart.places[].scores는 항상 6 키 모두 보유 (#214 M2)."""
+    from src.graph.review_compare_node import _build_compare_blocks  # pyright: ignore[reportMissingImports]
+
+    places: list[dict[str, Any]] = [
+        {"place_id": "p1", "name": "A", "category": "카페"},
+        {"place_id": "p2", "name": "B", "category": "카페"},
+    ]
+    scores_map = {"p1": {"satisfaction": 4.0}, "p2": {}}
+
+    blocks = _build_compare_blocks("A 비교 B", places, scores_map, {})
+
+    expected_keys = {"satisfaction", "accessibility", "cleanliness", "value", "atmosphere", "expertise"}
+    for place_chart in blocks[1]["places"]:
+        assert set(place_chart["scores"].keys()) == expected_keys
+
+
+async def test_review_compare_node_no_compare_keyword_returns_disambiguation() -> None:
+    """비교 키워드 없는 쿼리("A랑 B 어디냐?")는 intent_router 오분류 backstop으로 안내로 빠짐 (#214 H3)."""
+    from src.graph.review_compare_node import review_compare_node  # pyright: ignore[reportMissingImports]
+
+    state: dict[str, Any] = {
+        "query": "물포곤 청담점이랑 광화문점 어디냐?",
+        "processed_query": {"keywords": ["물포곤 청담점", "광화문점"]},
+    }
+
+    result = await review_compare_node(state)
+    blocks = result["response_blocks"]
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "disambiguation"
+    msg = blocks[0]["message"]
+    assert "비교" in msg or "리뷰 비교" in msg
+
+
+def test_intent_router_review_compare_requires_trigger_keyword() -> None:
+    """intent_router 분류 프롬프트 양쪽에 REVIEW_COMPARE trigger keyword 필수 명시 (#214 H2)."""
+    from src.graph.intent_router_node import _CLASSIFY_MULTI_SYSTEM_PROMPT, _CLASSIFY_SYSTEM_PROMPT
+
+    for prompt in (_CLASSIFY_SYSTEM_PROMPT, _CLASSIFY_MULTI_SYSTEM_PROMPT):
+        assert "Trigger keywords REQUIRED" in prompt, "REVIEW_COMPARE trigger keyword 명시 누락"
+        assert "NOT REVIEW_COMPARE" in prompt, "REVIEW_COMPARE 부정 예시 누락"
 
 
 # ---------------------------------------------------------------------------

@@ -92,68 +92,105 @@ async def _fetch_places_pg(
     return results
 
 
+# 6지표 키 고정 (analysis_node._VALID_SCORE_KEYS와 동일 — DRY 위해 별도 정의보다 import도 가능하지만
+# 본 노드 단독에서 chart axis fill에만 사용되므로 분리. analysis_node와 일치 유지 필수 — 불변식 #6).
+_VALID_SCORE_KEYS: frozenset[str] = frozenset(
+    {"satisfaction", "accessibility", "cleanliness", "value", "atmosphere", "expertise"}
+)
+
+# 비교 키워드 self-check — intent_router 오분류 backstop.
+# "비교" 동사·명사 / "어느"·"어디가 더" 선택 의문 / "리뷰"(스코어 비교 전제) 셋 중 하나는 있어야 비교 의도로 인정.
+_COMPARE_KEYWORDS: frozenset[str] = frozenset({"비교", "어느", "어디가 더", "리뷰"})
+
+
+def _fill_score_keys(scores: dict[str, float]) -> dict[str, float]:
+    """6 지표 키 중 누락된 것은 0.0으로 fill. 차트 axis 누락 방지 — 불변식 #6.
+
+    원본 점수가 빈 dict이면 6 키 모두 0.0 — FE가 'no data' 차트를 명시적으로 그릴 수 있음.
+    """
+    return {k: float(scores.get(k, 0.0)) for k in _VALID_SCORE_KEYS}
+
+
 async def _fetch_scores_os(
     os_client: Any,
     place_ids: list[str],
-) -> dict[str, dict[str, float]]:
-    """place_ids → OS place_reviews._raw_scores mget 1회 조회."""
+) -> tuple[dict[str, dict[str, float]], dict[str, int]]:
+    """place_ids → OS place_reviews._raw_scores + review_count mget 1회 조회.
+
+    Returns:
+        (scores_map, review_count_map). 둘 다 place_id → 값 dict. 실패 시 빈 dict 짝.
+        review_count_map은 analysis_sources.review_count 합산용 (analysis_node 패턴).
+    """
     from src.utils.resilience import retry_call  # pyright: ignore[reportMissingImports]
 
     if not place_ids:
-        return {}
+        return {}, {}
     doc_ids = [f"review_{pid}" for pid in place_ids]
     try:
         mget_resp = await retry_call(
             lambda: os_client.mget(
                 body={"ids": doc_ids},
                 index="place_reviews",
-                _source=["_raw_scores", "place_id"],
+                _source=["_raw_scores", "review_count", "place_id"],
             ),
             attempts=3,
         )
         scores_map: dict[str, dict[str, float]] = {}
+        review_count_map: dict[str, int] = {}
         for hit in mget_resp.get("docs", []):
             if hit.get("found"):
                 src = hit.get("_source", {})
                 pid = src.get("place_id", "")
+                if not pid:
+                    continue
                 raw = src.get("_raw_scores", {})
-                if pid and isinstance(raw, dict):
+                if isinstance(raw, dict):
                     scores_map[pid] = {k: float(v) for k, v in raw.items() if isinstance(v, (int, float))}
-        return scores_map
+                rc = src.get("review_count", 0)
+                review_count_map[pid] = int(rc) if rc is not None else 0
+        return scores_map, review_count_map
     except Exception:
         logger.exception("_fetch_scores_os: OS mget 실패")
-        return {}
+        return {}, {}
 
 
 def _build_compare_blocks(
     query: str,
     places: list[dict[str, Any]],
     scores_map: dict[str, dict[str, float]],
+    review_count_map: dict[str, int],
 ) -> list[dict[str, Any]]:
-    """text_stream + chart + analysis_sources raw dict 블록 생성."""
-    compare_lines = []
-    for p in places:
-        pid = p["place_id"]
-        scores = scores_map.get(pid, {})
-        score_str = ", ".join(f"{k}: {v:.1f}" for k, v in scores.items()) if scores else "데이터 없음"
-        compare_lines.append(f"- {p['name']} ({p.get('category', '')}): {score_str}")
+    """text_stream + chart + analysis_sources raw dict 블록 생성.
 
-    compare_text = "\n".join(compare_lines)
+    text_stream prompt에는 raw 점수를 포함하지 않는다 — 수치는 chart 블록 단독 책임.
+    Gemini가 점수를 prose로 풀어 출력하면 차트가 무의미해지고 화면이 줄글로 덮임.
+    """
+    place_names = ", ".join(p["name"] for p in places)
+    place_lines = "\n".join(f"- {p['name']} ({p.get('category', '')})" for p in places)
 
     return [
         {
             "type": "text_stream",
             "system": _COMPARE_SYSTEM_PROMPT,
-            "prompt": f"사용자 질문: {query}\n\n장소 비교:\n{compare_text}",
+            "prompt": (
+                f"사용자 질문: {query}\n\n"
+                f"비교 장소:\n{place_lines}\n\n"
+                "(6지표 점수는 레이더 차트로 별도 시각화됩니다. "
+                f"{place_names} 각 장소의 강점·약점·추천 상황을 한국어 1-2 문장으로만 요약하세요. "
+                "구체적인 점수 수치는 절대 언급하지 마세요.)"
+            ),
         },
         {
             "type": "chart",
             "chart_type": "radar",
-            "places": [{"name": p["name"], "scores": scores_map.get(p["place_id"], {})} for p in places],
+            "places": [
+                {"name": p["name"], "scores": _fill_score_keys(scores_map.get(p["place_id"], {}))} for p in places
+            ],
         },
         {
             "type": "analysis_sources",
-            "review_count": len([p for p in places if scores_map.get(p["place_id"])]),
+            # 비교 장소 전체의 리뷰 합산 — analysis_node 패턴.
+            "review_count": sum(review_count_map.get(p["place_id"], 0) for p in places),
         },
     ]
 
@@ -197,6 +234,28 @@ async def review_compare_node(state: dict[str, Any]) -> dict[str, Any]:
             ]
         }
 
+    # 비교 키워드 self-check — intent_router 오분류 backstop.
+    # 2 장소가 추출돼도 사용자가 "비교/리뷰/어디가 더" 같은 비교 의도를 명시하지 않으면 안내로 빠진다.
+    # 예) "A랑 B 어디냐?" 는 위치 질문(DETAIL_INQUIRY 영역)이지 비교가 아님.
+    if not any(kw in query for kw in _COMPARE_KEYWORDS):
+        logger.info(
+            "review_compare_node: 비교 키워드 없음 query_len=%d places=%d → disambiguation",
+            len(query),
+            len(place_names),
+        )
+        return {
+            "response_blocks": [
+                {
+                    "type": "disambiguation",
+                    "message": (
+                        "두 장소를 비교하시려는 거라면 '리뷰 비교해줘'라고 말씀해 주세요. "
+                        "위치나 정보가 궁금하시면 한 장소씩 물어봐 주세요."
+                    ),
+                    "candidates": [],
+                }
+            ]
+        }
+
     from src.db.opensearch import get_os_client  # pyright: ignore[reportMissingImports]
     from src.db.postgres import get_pool  # pyright: ignore[reportMissingImports]
 
@@ -229,7 +288,7 @@ async def review_compare_node(state: dict[str, Any]) -> dict[str, Any]:
             ]
         }
 
-    scores_map = await _fetch_scores_os(os_client, [p["place_id"] for p in places])
-    blocks = _build_compare_blocks(query, places, scores_map)
+    scores_map, review_count_map = await _fetch_scores_os(os_client, [p["place_id"] for p in places])
+    blocks = _build_compare_blocks(query, places, scores_map, review_count_map)
 
     return {"response_blocks": blocks}
