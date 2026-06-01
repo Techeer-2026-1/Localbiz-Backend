@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,7 +26,62 @@ from src.observability.logging import configure_logging  # pyright: ignore[repor
 # LOG_FORMAT=plain 환경변수로 평문 fallback 가능 (로컬 개발용).
 configure_logging()
 
+
+def _install_global_llm_callback() -> None:
+    """모든 ChatGoogleGenerativeAI 인스턴스에 LLM_METRICS_CALLBACK을 자동 부착.
+
+    각 호출 사이트(~15곳)에 callbacks 파라미터를 일일이 추가하지 않기 위해 __init__를
+    monkey-patch한다. 동일 callback 인스턴스가 중복 부착되지 않도록 dedup 처리.
+    """
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI  # pyright: ignore[reportMissingImports]
+
+        from src.observability.llm_callback import LLM_METRICS_CALLBACK  # pyright: ignore[reportMissingImports]
+    except Exception:
+        logging.getLogger(__name__).warning("LLM callback 주입 실패 — Gemini 호출 메트릭 미수집", exc_info=True)
+        return
+
+    orig_init = ChatGoogleGenerativeAI.__init__
+
+    def patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        cbs = kwargs.get("callbacks") or []
+        try:
+            cb_list = list(cbs)
+        except TypeError:
+            cb_list = []
+        if LLM_METRICS_CALLBACK not in cb_list:
+            cb_list.append(LLM_METRICS_CALLBACK)
+        kwargs["callbacks"] = cb_list
+        orig_init(self, *args, **kwargs)
+
+    ChatGoogleGenerativeAI.__init__ = patched_init  # type: ignore[method-assign]
+
+
+# 모듈 import 시점에 1회만 패치 — 모든 노드가 import하기 전에 적용되도록.
+_install_global_llm_callback()
+
 logger = logging.getLogger(__name__)
+
+
+async def _pool_gauge_loop(interval_seconds: float = 10.0) -> None:
+    """asyncpg pool 사용량을 주기적으로 Prometheus Gauge에 반영.
+
+    Pool 초기화 전이거나 일시적 RuntimeError 시 0으로 보고. 종료는 task cancel.
+    """
+    import asyncio
+
+    from src.db.postgres import get_pool_in_use_count  # pyright: ignore[reportMissingImports]
+    from src.observability.metrics import langgraph_pg_pool_in_use  # pyright: ignore[reportMissingImports]
+
+    while True:
+        try:
+            langgraph_pg_pool_in_use.set(get_pool_in_use_count())
+        except Exception:
+            langgraph_pg_pool_in_use.set(0)
+        try:
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            break
 
 
 @asynccontextmanager
@@ -43,6 +98,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
       2. yield → 서버가 요청을 받기 시작
       3. 서버 종료 → yield 아래쪽 코드 실행 (pool/client 정리)
     """
+    import asyncio
+
     _ = application  # FastAPI가 넘겨주지만 여기선 안 쓴다
 
     # --- Startup: 서버가 뜰 때 1번 실행 ---
@@ -63,11 +120,19 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("OpenSearch client init failed (OS 미연결 시 정상)")
 
+    pool_gauge_task = asyncio.create_task(_pool_gauge_loop())
+
     yield  # ← 이 지점에서 서버가 요청을 받기 시작
 
     # --- Shutdown: 서버가 내려갈 때 1번 실행 ---
     from src.db.opensearch import close_os_client  # pyright: ignore[reportMissingImports]
     from src.db.postgres import close_pool  # pyright: ignore[reportMissingImports]
+
+    pool_gauge_task.cancel()
+    try:
+        await pool_gauge_task
+    except (asyncio.CancelledError, Exception):
+        pass
 
     await close_os_client()
     logger.info("OpenSearch client closed")

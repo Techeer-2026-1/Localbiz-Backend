@@ -37,6 +37,7 @@ from src.observability.context import (  # pyright: ignore[reportMissingImports]
     thread_id_var,
     user_id_var,
 )
+from src.observability.metrics import langgraph_sse_sessions  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -321,6 +322,7 @@ async def chat_stream(
         rid_token = request_id_var.set(request_id)
         tid_token = thread_id_var.set(thread_id)
         uid_token = user_id_var.set(None)  # JWT 디코드 후 갱신
+        langgraph_sse_sessions.inc()
 
         logger.info(
             "SSE stream started: thread_id=%s, query_len=%d, request_id=%s",
@@ -566,6 +568,7 @@ async def chat_stream(
                 request_id_var.reset(rid_token)
             except ValueError:
                 pass
+            langgraph_sse_sessions.dec()
 
     return StreamingResponse(
         event_generator(),
