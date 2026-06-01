@@ -10,7 +10,7 @@ from opentelemetry import trace  # pyright: ignore[reportMissingImports]
 from opentelemetry.sdk.trace import TracerProvider  # pyright: ignore[reportMissingImports]
 
 from src.observability.context import request_id_var, thread_id_var, user_id_var
-from src.observability.logging import TraceContextFilter, configure_logging
+from src.observability.logging import TraceContextFilter, UvicornAccessFilter, configure_logging
 
 
 def _last_log_line(capsys: Any) -> dict[str, Any]:
@@ -73,6 +73,57 @@ def test_trace_context_filter_injects_request_user_thread() -> None:
         request_id_var.reset(rid_token)
         user_id_var.reset(uid_token)
         thread_id_var.reset(tid_token)
+
+
+def test_uvicorn_access_filter_drops_health_and_metrics() -> None:
+    """UvicornAccessFilter가 /health·/metrics 요청 record를 drop, 그 외는 유지."""
+    f = UvicornAccessFilter()
+
+    def make_record(request_line: str) -> logging.LogRecord:
+        return logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=10,
+            msg='%s:%s - "%s %s %s" %s',
+            args=("127.0.0.1", "45144", "GET", request_line, "HTTP/1.1", 200),
+            exc_info=None,
+        )
+
+    # uvicorn args의 path는 인자 3번 위치 (full_path) — getMessage fallback도 확인.
+    health_rec = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=10,
+        msg='%s - "%s %s %s" %s',
+        args=("127.0.0.1:45144", "GET", "/health", "HTTP/1.1", 200),
+        exc_info=None,
+    )
+    metrics_rec = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=10,
+        msg='%s - "%s %s %s" %s',
+        args=("10.178.0.4:60908", "GET", "/metrics", "HTTP/1.1", 200),
+        exc_info=None,
+    )
+    api_rec = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=10,
+        msg='%s - "%s %s %s" %s',
+        args=("127.0.0.1:45144", "GET", "/api/v1/chat/stream", "HTTP/1.1", 200),
+        exc_info=None,
+    )
+
+    assert f.filter(health_rec) is False
+    assert f.filter(metrics_rec) is False
+    assert f.filter(api_rec) is True
+    # make_record는 사용하지 않지만 사인쳐 시그니처 회귀 보장.
+    _ = make_record
 
 
 def test_trace_context_filter_attaches_trace_id_when_span_active() -> None:
