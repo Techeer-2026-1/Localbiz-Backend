@@ -404,3 +404,152 @@ async def test_llm_compose_api_error() -> None:
     assert title is None
     assert desc is None
     assert details == []
+
+
+# ---------------------------------------------------------------------------
+# congestion 주입 (BE 요청 #1, 2026-06-04) — place_recommend_node 패턴 재사용
+# ---------------------------------------------------------------------------
+async def test_course_plan_node_congestion_injection() -> None:
+    """course_plan_node 메인 경로: unique districts 만큼 fetch 호출 + 모든 stop place 에 congestion 매핑."""
+    from src.graph import course_plan_node as cp_module  # pyright: ignore[reportMissingImports]
+
+    # 강남구 3건 + 서초구 2건 — unique districts = 2
+    candidates_mixed: list[dict[str, Any]] = [
+        {
+            "place_id": f"p-{i}",
+            "name": f"강남장소{i}",
+            "category": "맛집",
+            "address": "addr",
+            "district": "강남구",
+            "lat": 37.5 + i * 0.001,
+            "lng": 127.0 + i * 0.001,
+        }
+        for i in range(3)
+    ] + [
+        {
+            "place_id": f"p-s{i}",
+            "name": f"서초장소{i}",
+            "category": "맛집",
+            "address": "addr",
+            "district": "서초구",
+            "lat": 37.49 + i * 0.001,
+            "lng": 127.01 + i * 0.001,
+        }
+        for i in range(2)
+    ]
+
+    cong_by_district = {
+        "강남구": {"level": "high", "updated_at": "2026-06-04", "source": "area_proxy"},
+        "서초구": {"level": "medium", "updated_at": "2026-06-04", "source": "area_proxy"},
+    }
+    fetch_mock = AsyncMock(side_effect=lambda _pool, d: cong_by_district.get(d))
+
+    mock_settings = type("Settings", (), {"gemini_llm_api_key": None})()  # OS/LLM rerank skip
+
+    with (
+        patch("src.config.get_settings", return_value=mock_settings),
+        patch("src.db.postgres.get_pool", return_value=AsyncMock()),
+        patch("src.db.opensearch.get_os_client", side_effect=RuntimeError("no os")),
+        patch.object(cp_module, "_search_by_categories", AsyncMock(return_value=candidates_mixed)),
+        patch.object(cp_module, "_llm_rerank_candidates", AsyncMock(side_effect=lambda c, *_a, **_k: c)),
+        patch("src.graph.crowdedness_node.fetch_congestion_by_district", fetch_mock),
+    ):
+        result = await cp_module.course_plan_node({"query": "강남 맛집 코스", "processed_query": {}})
+
+    # unique districts 2건만 호출
+    assert fetch_mock.await_count == 2
+    called_districts = {call.args[1] for call in fetch_mock.await_args_list}
+    assert called_districts == {"강남구", "서초구"}
+
+    # course block 의 모든 stop place 에 congestion 매핑
+    course = next(b for b in result["response_blocks"] if b.get("type") == "course")
+    for stop in course["stops"]:
+        d = stop["place"]["district"]
+        assert stop["place"]["congestion"] == cong_by_district[d]
+
+
+async def test_course_plan_node_congestion_failure_graceful() -> None:
+    """fetch_congestion_by_district 가 예외를 던져도 노드는 성공, congestion 키는 없음."""
+    from src.graph import course_plan_node as cp_module  # pyright: ignore[reportMissingImports]
+
+    candidates: list[dict[str, Any]] = [
+        {
+            "place_id": "p-1",
+            "name": "장소1",
+            "category": "맛집",
+            "address": "a",
+            "district": "강남구",
+            "lat": 37.5,
+            "lng": 127.0,
+        },
+    ]
+    fetch_mock = AsyncMock(side_effect=RuntimeError("DB down"))
+    mock_settings = type("Settings", (), {"gemini_llm_api_key": None})()
+
+    with (
+        patch("src.config.get_settings", return_value=mock_settings),
+        patch("src.db.postgres.get_pool", return_value=AsyncMock()),
+        patch("src.db.opensearch.get_os_client", side_effect=RuntimeError("no os")),
+        patch.object(cp_module, "_search_by_categories", AsyncMock(return_value=candidates)),
+        patch.object(cp_module, "_llm_rerank_candidates", AsyncMock(side_effect=lambda c, *_a, **_k: c)),
+        patch("src.graph.crowdedness_node.fetch_congestion_by_district", fetch_mock),
+    ):
+        result = await cp_module.course_plan_node({"query": "강남 맛집 코스", "processed_query": {}})
+
+    course = next(b for b in result["response_blocks"] if b.get("type") == "course")
+    # gather(return_exceptions=True) → isinstance(c, dict) 필터 → cong_map 에 없음 → congestion None
+    assert course["stops"][0]["place"]["congestion"] is None
+
+
+async def test_refine_replace_injects_congestion() -> None:
+    """_handle_refinement replace 분기에서 신규 stop place 에 congestion 주입."""
+    from src.graph import course_plan_node as cp_module  # pyright: ignore[reportMissingImports]
+
+    previous_blocks: list[dict[str, Any]] = [
+        {
+            "type": "course",
+            "course_id": "prev-id",
+            "title": "기존 코스",
+            "stops": [
+                {"order": 1, "place": {"place_id": "old-1", "name": "기존1", "district": "종로구"}},
+                {"order": 2, "place": {"place_id": "old-2", "name": "기존2", "district": "종로구"}},
+            ],
+        },
+    ]
+    new_candidate = {
+        "place_id": "new-1",
+        "name": "신규장소",
+        "category": "카페",
+        "address": "addr",
+        "district": "강남구",
+        "lat": 37.5,
+        "lng": 127.0,
+    }
+    cong_value = {"level": "low", "updated_at": "2026-06-04", "source": "area_proxy"}
+    fetch_mock = AsyncMock(return_value=cong_value)
+
+    # PG fetch / OS search mock — refine 의 단건 검색 경로
+    pool_mock = AsyncMock()
+    pool_mock.fetch = AsyncMock(return_value=[new_candidate])
+    mock_settings = type("Settings", (), {"gemini_llm_api_key": None})()  # OS skip
+
+    state: dict[str, Any] = {
+        "query": "2번 장소 바꿔줘",
+        "processed_query": {"district": None, "category": None, "expanded_query": "카페"},
+        "previous_blocks": previous_blocks,
+        "refinement": {"action": "replace", "target_index": 2, "new_condition": "다른 카페"},
+    }
+
+    with (
+        patch("src.config.get_settings", return_value=mock_settings),
+        patch("src.db.postgres.get_pool", return_value=pool_mock),
+        patch("src.graph.crowdedness_node.fetch_congestion_by_district", fetch_mock),
+    ):
+        result = await cp_module.course_plan_node(state)
+
+    course = next(b for b in result["response_blocks"] if b.get("type") == "course")
+    assert len(course["stops"]) == 2
+    # 2번 stop 이 신규로 교체됐고 congestion 주입됨
+    assert course["stops"][1]["place"]["place_id"] == "new-1"
+    assert course["stops"][1]["place"]["congestion"] == cong_value
+    fetch_mock.assert_awaited_once()

@@ -61,6 +61,8 @@ PYTHONPATH=. python backend/scripts/etl/crawl_reviews.py --naver-only --category
 PYTHONPATH=. python backend/scripts/etl/load_vectors.py --limit 100
 ```
 
+> **pre-commit hook**: `ruff check` + `ruff format` + `no-commit-to-branch` (main 직접 커밋 차단) 자동 실행. 실패 시 자동 수정된 파일을 다시 stage 후 커밋. `--no-verify` 우회 금지.
+
 ## Architecture
 
 ### LangGraph Flow (`backend/src/graph/real_builder.py`)
@@ -83,7 +85,7 @@ SSE → intent_router → query_preprocessor → (조건부 라우팅)
   └── GENERAL          → general          → response_builder → END
 ```
 
-> 전체 intent 분류는 `backend/AGENTS.md`의 "12+1 Intent Types" 참조. `refine_node`는 멀티턴 보정용 보조 노드(`refine_helpers.py`).
+> **Intent 권위**: `backend/src/graph/intent_router_node.py:IntentType` (16 enum / 15 routable). `FAVORITE` 는 enum 에 있으나 routable 아님 → `GENERAL` fallback. `REFINE` 는 멀티턴 보정용 (`refine_helpers.py`). `backend/AGENTS.md` 의 "12+1" 표기는 stale — 권위는 코드.
 
 **핵심 패턴**: `AgentState.response_blocks`는 `Annotated[list, operator.add]`로 정의되어 각 노드가 list를 반환하면 자동 append. `text_stream` 블록은 `{"type":"text_stream","system":"...","prompt":"..."}`을 `response_blocks`에 추가하면 `sse.py`에서 Gemini `astream()`으로 토큰 단위 스트리밍.
 
@@ -141,7 +143,7 @@ SSE → intent_router → query_preprocessor → (조건부 라우팅)
 7. **임베딩 통일**: 768d Gemini만. OpenAI 사용 시 PR 차단.
 8. **DB 쿼리**: asyncpg 파라미터 바인딩(`$1`,`$2`) 필수. f-string SQL 금지. ORM 미사용.
 9. **타입 힌트**: `Optional[str]` 사용. `str | None` 금지(파이썬 3.9 호환).
-10. **SSE 이벤트 타입 16종 고정**: intent/text/text_stream/place/places/events/course/map_markers/map_route/chart/calendar/references/analysis_sources/disambiguation/done/error. ※ 16종은 messages.blocks JSON에 저장 가능한 **콘텐츠 블록** 한정. `status`(노드 전환 진행 표시)와 `done_partial`(multi-intent 구분자)은 **SSE 제어 이벤트**로 messages 미저장(런타임 한정)이므로 본 목록에서 제외 — 기획서 §4.5 "SSE 제어" 카테고리 참조.
+10. **SSE 이벤트 타입 16종 고정**: intent/text/text_stream/place/places/events/course/map_markers/map_route/chart/calendar/references/analysis_sources/disambiguation/done/error. ※ 16종은 messages.blocks JSON에 저장 가능한 **콘텐츠 블록** 한정. `status`(노드 전환 진행 표시)와 `done_partial`(multi-intent 구분자)은 **SSE 제어 이벤트**로 messages 미저장(런타임 한정)이므로 본 목록에서 제외 — 기획서 §4.5 "SSE 제어" 카테고리 참조. ※ `text_stream` 은 SSE 전송 시 `delta` 토큰만 흘리고, 완료 후 messages.blocks 에는 `{"type":"text_stream","content":<full_text>}` 로 저장 (TextBlock 변환 없음, `sse.py:489`).
 11. **intent별 블록 순서 고정**: 기획서 §4.5. 변경하려면 .sisyphus/plans/ 작성 필요.
 12. **공통 쿼리 전처리**: Intent Router 직후 모든 검색 기능 공통 (Gemini JSON mode).
 13. **행사 검색 순서**: DB 우선 → 부족 시 Naver fallback. 역순 금지.
@@ -177,3 +179,6 @@ SSE → intent_router → query_preprocessor → (조건부 라우팅)
 - append-only 테이블 UPDATE/DELETE
 - f-string SQL / OpenAI 임베딩 / `str | None` 문법 / ORM 도입
 - 기획 문서를 코드 컨벤션에 맞춰 임의 수정
+- bash chain 의 `||` fallback 에 destructive op 금지 (`mkdir -p X && do || rm -rf X` 패턴). 별도 if 블록으로 분리 — 2026-04-10 사고 재발 방지.
+- 변수 치환은 가드 필수: `"${VAR:?VAR must be set}/old"`. 빈 변수 → `/old` 삭제 사고 회피.
+- `backend/_archive/` 수정 금지 — ruff `extend-exclude=["_archive"]` (`pyproject.toml:4`). 참조 전용 PoC. 신규는 `backend/src/`, `backend/scripts/` 에만.
