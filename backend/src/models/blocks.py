@@ -139,6 +139,7 @@ class CoursePlaceInfo(BaseModel):
     business_hours_today: Optional[str] = None  # Phase 1 생략
     is_open_now: Optional[bool] = None  # Phase 1 생략
     booking_url: Optional[str] = None  # Phase 1 생략
+    congestion: Optional[CongestionInfo] = None  # 동네 단위 area_proxy (불변식 #5)
 
 
 class CourseTransit(BaseModel):
