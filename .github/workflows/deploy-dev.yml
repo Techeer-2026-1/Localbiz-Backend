@@ -57,6 +57,7 @@ jobs:
           GOOGLE_CALENDAR_CLIENT_SECRET=${GOOGLE_CALENDAR_CLIENT_SECRET}
           GOOGLE_CALENDAR_REDIRECT_URI=${GOOGLE_CALENDAR_REDIRECT_URI}
           GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
+          GEMINI_LLM_API_KEY=${GEMINI_LLM_API_KEY}
           LOKI_HOST=10.178.0.4
           PROMTAIL_ENV=production
           EOF
@@ -71,12 +72,15 @@ jobs:
           cd backend
 
           # 시크릿 .env에 병합 — 시크릿 파일 경로는 $1 (없으면 레거시 경로)
+          # value 빈 라인은 skip — GitHub secret 미설정 시 .env의 기존 키를
+          # 빈값으로 덮어쓰는 사고 방지 (2026-06-05 GEMINI_LLM_API_KEY 갱신 사고 재발 방지).
           SECRETS_FILE="${1:-/tmp/secrets.env}"
           if [ -f "$SECRETS_FILE" ]; then
             while IFS= read -r line; do
               [ -z "$line" ] && continue
               key="${line%%=*}"
               value="${line#*=}"
+              [ -z "$value" ] && continue
               if grep -q "^${key}=" .env 2>/dev/null; then
                 grep -v "^${key}=" .env > .env.tmp
                 echo "${key}=${value}" >> .env.tmp
@@ -132,6 +136,7 @@ jobs:
           GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.GOOGLE_CALENDAR_CLIENT_SECRET }}
           GOOGLE_CALENDAR_REDIRECT_URI: ${{ secrets.GOOGLE_CALENDAR_REDIRECT_URI }}
           GCS_BUCKET_NAME: ${{ secrets.GCS_BUCKET_NAME }}
+          GEMINI_LLM_API_KEY: ${{ secrets.GEMINI_LLM_API_KEY }}
 
       # ②-c scp 전 선제 디스크 정리 — 디스크 풀 시 scp "write remote Failure" 방지(자가 치유).
       #     기존 정리는 deploy 스크립트 내부(scp 이후 실행)라, 디스크가 이미 차면 업로드 자체가
